@@ -1,0 +1,14 @@
+﻿node_modules/
+test-artifacts/
+coverage/
+dist/
+build/
+*.log
+server.log
+server.err.log
+.env
+.env.*
+!.env.example
+data/
+.DS_Store
+Thumbs.db

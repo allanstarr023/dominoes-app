@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dominoes Table</title>
+    <meta name="theme-color" content="#174d3f">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Dominoes">
+    <link rel="manifest" href="/manifest.webmanifest?v=40">
+    <link rel="stylesheet" href="/styles.css?v=40">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="topbar-title">
+          <div class="brand">Dominoes Table</div>
+          <div class="room-line" id="roomLine">No room selected</div>
+        </div>
+        <div class="topbar-right">
+          <div class="host-action-bar hidden" id="hostActionBar">
+            <button class="host-top-button hidden" id="topStartMatchButton" type="button">Start Match</button>
+            <button class="host-top-button danger-button hidden" id="topEndSessionButton" type="button">End Session</button>
+          </div>
+          <div class="session-pill" id="sessionPill">Not seated</div>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="setup-panel" id="setupPanel">
+          <div class="setup-grid">
+            <form class="panel" id="createRoomForm">
+              <h1>New Table</h1>
+              <label>
+                Name
+                <input id="hostNameInput" autocomplete="name" maxlength="40" required>
+              </label>
+              <label>
+                Championship
+                <select id="matchLengthInput">
+                  <option value="2">2-game championship</option>
+                  <option value="5">5-game championship</option>
+                  <option value="10">10-game championship</option>
+                </select>
+              </label>
+              <label>
+                Player Graphic
+                <select id="hostAvatarInput"></select>
+              </label>
+              <button type="submit">Create Room</button>
+            </form>
+
+            <form class="panel" id="openRoomForm">
+              <h1>Join Table</h1>
+              <label>
+                Room ID
+                <input id="roomIdInput" maxlength="60" required>
+              </label>
+              <label>
+                Name
+                <input id="joinNameInput" autocomplete="name" maxlength="40">
+              </label>
+              <button type="submit">Open Room</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="join-panel hidden" id="joinPanel">
+          <form class="panel join-card" id="joinRoomForm">
+            <h1 id="joinRoomTitle">Join Table</h1>
+            <label>
+              Name
+              <input id="roomJoinNameInput" autocomplete="name" maxlength="40" required>
+            </label>
+            <label>
+              Player Graphic
+              <select id="roomJoinAvatarInput"></select>
+            </label>
+            <button type="submit">Take Seat</button>
+          </form>
+        </section>
+
+        <section class="table-view hidden" id="tableView">
+          <aside class="sidebar">
+            <details class="panel dock-section players-dock" id="playersDock" open>
+              <summary class="dock-summary">
+                <span>Players</span>
+                <span class="dock-summary-meta">Roster</span>
+              </summary>
+              <div class="dock-body">
+                <div class="dock-actions">
+                  <button class="small-button" id="copyInviteButton" type="button">Copy Link</button>
+                </div>
+                <div class="players-list" id="playersList"></div>
+                <button class="small-button" id="addBotButton" type="button">Add Bot</button>
+                <button id="startMatchButton" type="button">Start Match</button>
+                <button class="danger-button hidden" id="endSessionButton" type="button">End Session</button>
+              </div>
+            </details>
+
+            <details class="panel dock-section score-dock" id="scoreDock" open>
+              <summary class="dock-summary">
+                <span>Score</span>
+                <span id="gameCounter">Championship</span>
+              </summary>
+              <div class="dock-body">
+                <div class="score-list" id="scoreList"></div>
+              </div>
+            </details>
+
+            <details class="panel dock-section leaderboard-dock" id="leaderboardDock" open>
+              <summary class="dock-summary">
+                <span>Leaderboard</span>
+                <span class="dock-summary-meta">Records</span>
+              </summary>
+              <div class="dock-body">
+                <div class="dock-actions">
+                  <button class="small-button" id="refreshStatsButton" type="button">Refresh</button>
+                </div>
+                <div class="leaderboard-list" id="leaderboardList"></div>
+                <label>
+                  Records
+                  <select id="recordsCategory">
+                    <option value="mostPoints5">Most points in a 5 game match championship</option>
+                    <option value="mostPoints10">Most points in a 10 game match championship</option>
+                    <option value="mostLockWins5">Most lock n Wins in a 5 game match championship</option>
+                    <option value="mostLockWins10">Most lock and Wins in a 10 game match championship</option>
+                    <option value="lowestScore5">Lowest score in a 5 game match championship</option>
+                    <option value="lowestScore10">Lowest score in a 10 game match championship</option>
+                    <option value="consecutiveWins5">Most consecutive wins in a 5 game match championship</option>
+                    <option value="consecutiveWins10">Most consecutive wins in a 10 game match championship</option>
+                    <option value="mostPoints2">Most points in a 2 game match championship</option>
+                    <option value="mostLockWins2">Most lock n Wins in a 2 game match championship</option>
+                    <option value="lowestScore2">Lowest score total in a 2 game match championship</option>
+                    <option value="consecutiveWins2">Most consecutive wins in a 2 game match championship</option>
+                  </select>
+                </label>
+                <div class="records-list" id="recordsList"></div>
+              </div>
+            </details>
+
+            <section class="panel settings-panel hidden" id="settingsPanel">
+              <div class="panel-header">
+                <h2>Settings</h2>
+                <button class="small-button" id="settingsToggleButton" type="button">Expand</button>
+              </div>
+              <form class="admin-login-form" id="adminLoginForm">
+                <input id="adminPasswordInput" type="password" autocomplete="current-password" placeholder="Admin password">
+                <button class="small-button" type="submit">Login</button>
+              </form>
+              <form class="settings-form hidden" id="settingsForm">
+                <div class="settings-grid">
+                  <label>1st <input id="settingFirst" type="number" min="0" max="100"></label>
+                  <label>2nd <input id="settingSecond" type="number" min="0" max="100"></label>
+                  <label>3rd <input id="settingThird" type="number" min="0" max="100"></label>
+                  <label>4th <input id="settingFourth" type="number" min="0" max="100"></label>
+                  <label>Lock win <input id="settingLockWin" type="number" min="0" max="100"></label>
+                  <label>Lock lose <input id="settingLockLose" type="number" min="-100" max="100"></label>
+                  <label>Play secs <input id="settingTurnSeconds" type="number" min="5" max="300"></label>
+                  <label>Between secs <input id="settingBetweenSeconds" type="number" min="0" max="300"></label>
+                  <label>Final secs <input id="settingFinalSeconds" type="number" min="0" max="300"></label>
+                  <label>Break secs <input id="settingBreakSeconds" type="number" min="0" max="600"></label>
+                  <label>Seed secs
+                    <select id="settingSeedSeconds">
+                      <option value="10">10</option>
+                      <option value="15">15</option>
+                      <option value="20">20</option>
+                    </select>
+                  </label>
+                  <label>Infractions <input id="settingInfractions" type="number" min="1" max="20"></label>
+                  <label>Penalty <input id="settingPenalty" type="number" min="-100" max="0"></label>
+                </div>
+                <button class="small-button" type="submit">Save Settings</button>
+              </form>
+            </section>
+          </aside>
+
+          <section class="table-panel">
+            <div class="table-status">
+              <div>
+                <div class="status-label" id="turnLabel">Waiting</div>
+                <div class="status-sub" id="statusSub">Room not started</div>
+              </div>
+              <div class="timer" id="turnTimer">45</div>
+            </div>
+
+            <div class="board" id="board"></div>
+            <div class="end-choice hidden" id="endChoice"></div>
+
+            <div class="hand-section">
+              <div class="hand-header">
+                <h2>Your Hand</h2>
+                <div class="hand-actions">
+                  <button class="small-button" id="passButton" type="button">Pass</button>
+                  <button class="small-button" id="seedBoardButton" type="button">Seed to Board</button>
+                  <button class="small-button hidden" id="bathroomBreakButton" type="button">Bath Break</button>
+                  <button class="small-button hidden" id="resumeBreakButton" type="button">Resume</button>
+                </div>
+              </div>
+              <div class="hand" id="hand"></div>
+            </div>
+          </section>
+
+          <aside class="chat-panel panel">
+            <h2>Chat</h2>
+            <div class="chat-log" id="chatLog"></div>
+            <form class="chat-form" id="chatForm">
+              <input id="chatInput" maxlength="500" autocomplete="off">
+              <button type="submit">Send</button>
+            </form>
+          </aside>
+        </section>
+      </main>
+
+      <div class="toast hidden" id="toast"></div>
+    </div>
+
+    <script type="module" src="/app.js?v=40"></script>
+  </body>
+</html>
