@@ -170,7 +170,7 @@ test("disconnecting and reconnecting a room player pauses and resumes the match"
   assert.equal(reconnected.status, ROOM_STATUS.ACTIVE);
   assert.equal(reconnected.seats.find((seat) => seat.playerId === "p3").connected, true);
   assert.equal(reconnected.match.status, "active");
-  assert.equal(reconnected.match.game.turnDeadlineAt, 95_000);
+  assert.equal(reconnected.match.game.turnDeadlineAt, 80_000);
 });
 
 test("room status follows a completed match", () => {

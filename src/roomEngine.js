@@ -2,6 +2,7 @@ import {
   MATCH_STATUS,
   addPlayerToMatch,
   cancelMatch,
+  removePlayerFromMatch,
   setPlayerConnection,
   startMatch
 } from "./matchEngine.js";
@@ -309,6 +310,31 @@ export function replaceRoomMatch(room, match) {
   return syncRoomWithMatch({
     ...room,
     match
+  });
+}
+
+export function removeRoomPlayer(room, playerId, options = {}) {
+  const { now = Date.now(), reason = "adminRemovedPlayer" } = options;
+
+  assertSeatedPlayer(room, playerId);
+
+  if (room.hostPlayerId === playerId || room.match?.playerOrder?.includes(playerId)) {
+    return cancelRoom(room, { now, reason });
+  }
+
+  const seats = room.seats.filter((seat) => seat.playerId !== playerId);
+
+  if (!room.match || !room.match.playersById[playerId]) {
+    return {
+      ...room,
+      seats
+    };
+  }
+
+  return syncRoomWithMatch({
+    ...room,
+    seats,
+    match: removePlayerFromMatch(room.match, playerId)
   });
 }
 

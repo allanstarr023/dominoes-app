@@ -1,13 +1,13 @@
-const CACHE_NAME = "dominoes-table-v40";
+const CACHE_NAME = "dominoes-table-v44";
 const STATIC_ASSETS = [
   "/",
   "/index.html",
-  "/styles.css?v=40",
-  "/app.js?v=40",
-  "/boardLayout.js?v=40",
-  "/pixiBoardRenderer.js?v=40",
-  "/vendor/pixi.min.mjs?v=40",
-  "/manifest.webmanifest?v=40",
+  "/styles.css?v=44",
+  "/app.js?v=44",
+  "/boardLayout.js?v=44",
+  "/pixiBoardRenderer.js?v=44",
+  "/vendor/pixi.min.mjs?v=44",
+  "/manifest.webmanifest?v=44",
   "/icon.svg"
 ];
 

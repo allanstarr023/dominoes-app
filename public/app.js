@@ -1,4 +1,4 @@
-import { clearPixiBoard, renderPixiBoard } from "./pixiBoardRenderer.js?v=40";
+import { clearPixiBoard, renderPixiBoard } from "./pixiBoardRenderer.js?v=44";
 
 const state = {
   room: null,
@@ -10,6 +10,14 @@ const state = {
   stats: null,
   settings: null,
   adminToken: sessionStorage.getItem("dominoes-admin-token"),
+  portalAdminToken: sessionStorage.getItem("dominoes-portal-admin-token"),
+  portalData: null,
+  portalStatus: null,
+  adminView: isAdminPath(),
+  portalRefreshInterval: null,
+  portalNoticeTimer: null,
+  adminProfilePictureDataUrl: "",
+  sharePanelOpen: false,
   settingsExpanded: false,
   statsLoadedForMatchId: null,
   lastAnimatedActionKey: null
@@ -19,16 +27,16 @@ const CHAT_BLOCK_MINUTES = 5;
 const MAX_PLAYERS_PER_ROOM = 7;
 const ACTIVE_PLAYERS_PER_GAME = 4;
 const PLAYER_AVATARS = Object.freeze([
-  { id: "crown", label: "Crown", graphic: "♛", color: "#c98319" },
-  { id: "rocket", label: "Rocket", graphic: "◆", color: "#cf4d3f" },
-  { id: "star", label: "Star", graphic: "★", color: "#f0b940" },
-  { id: "bolt", label: "Bolt", graphic: "ϟ", color: "#2d65b3" },
-  { id: "shield", label: "Shield", graphic: "⬟", color: "#174d3f" },
-  { id: "gem", label: "Gem", graphic: "◆", color: "#2e9a9b" },
-  { id: "flame", label: "Flame", graphic: "▲", color: "#cf4d3f" },
-  { id: "moon", label: "Moon", graphic: "◐", color: "#6f63b6" },
-  { id: "sun", label: "Sun", graphic: "☀", color: "#d79817" },
-  { id: "anchor", label: "Anchor", graphic: "⌾", color: "#2f6f88" }
+  { id: "crown", label: "Smile", graphic: "\uD83D\uDE00", color: "#c98319" },
+  { id: "rocket", label: "Cool", graphic: "\uD83D\uDE0E", color: "#cf4d3f" },
+  { id: "star", label: "Laugh", graphic: "\uD83D\uDE04", color: "#f0b940" },
+  { id: "bolt", label: "Wink", graphic: "\uD83D\uDE09", color: "#2d65b3" },
+  { id: "shield", label: "Think", graphic: "\uD83E\uDD14", color: "#174d3f" },
+  { id: "gem", label: "Grin", graphic: "\uD83D\uDE01", color: "#2e9a9b" },
+  { id: "flame", label: "Focused", graphic: "\uD83D\uDE10", color: "#cf4d3f" },
+  { id: "moon", label: "Surprise", graphic: "\uD83D\uDE2E", color: "#6f63b6" },
+  { id: "sun", label: "Joy", graphic: "\uD83D\uDE0A", color: "#d79817" },
+  { id: "anchor", label: "Champion", graphic: "\uD83E\uDD29", color: "#2f6f88" }
 ]);
 
 const els = {
@@ -37,8 +45,41 @@ const els = {
   hostActionBar: document.querySelector("#hostActionBar"),
   topStartMatchButton: document.querySelector("#topStartMatchButton"),
   topEndSessionButton: document.querySelector("#topEndSessionButton"),
+  portalNotice: document.querySelector("#portalNotice"),
   setupPanel: document.querySelector("#setupPanel"),
   joinPanel: document.querySelector("#joinPanel"),
+  adminPortal: document.querySelector("#adminPortal"),
+  portalAdminLoginForm: document.querySelector("#portalAdminLoginForm"),
+  portalAdminEmailInput: document.querySelector("#portalAdminEmailInput"),
+  portalAdminPasswordInput: document.querySelector("#portalAdminPasswordInput"),
+  adminDashboard: document.querySelector("#adminDashboard"),
+  adminRefreshButton: document.querySelector("#adminRefreshButton"),
+  adminMetrics: document.querySelector("#adminMetrics"),
+  adminReportsList: document.querySelector("#adminReportsList"),
+  adminRoomsList: document.querySelector("#adminRoomsList"),
+  adminShutdownForm: document.querySelector("#adminShutdownForm"),
+  adminShutdownMode: document.querySelector("#adminShutdownMode"),
+  adminShutdownStart: document.querySelector("#adminShutdownStart"),
+  adminShutdownEnd: document.querySelector("#adminShutdownEnd"),
+  adminShutdownMessage: document.querySelector("#adminShutdownMessage"),
+  adminShutdownList: document.querySelector("#adminShutdownList"),
+  adminBroadcastForm: document.querySelector("#adminBroadcastForm"),
+  adminBroadcastAudience: document.querySelector("#adminBroadcastAudience"),
+  adminBroadcastMessage: document.querySelector("#adminBroadcastMessage"),
+  adminBroadcastList: document.querySelector("#adminBroadcastList"),
+  adminCapacityForm: document.querySelector("#adminCapacityForm"),
+  adminCapacityInput: document.querySelector("#adminCapacityInput"),
+  adminAllowNewInput: document.querySelector("#adminAllowNewInput"),
+  adminUserForm: document.querySelector("#adminUserForm"),
+  adminUserFirstName: document.querySelector("#adminUserFirstName"),
+  adminUserLastName: document.querySelector("#adminUserLastName"),
+  adminUserEmail: document.querySelector("#adminUserEmail"),
+  adminUserPassword: document.querySelector("#adminUserPassword"),
+  adminUserRole: document.querySelector("#adminUserRole"),
+  adminUserStatus: document.querySelector("#adminUserStatus"),
+  adminUserProfilePicture: document.querySelector("#adminUserProfilePicture"),
+  adminUsersList: document.querySelector("#adminUsersList"),
+  adminAuditList: document.querySelector("#adminAuditList"),
   tableView: document.querySelector("#tableView"),
   createRoomForm: document.querySelector("#createRoomForm"),
   openRoomForm: document.querySelector("#openRoomForm"),
@@ -59,7 +100,10 @@ const els = {
   bathroomBreakButton: document.querySelector("#bathroomBreakButton"),
   resumeBreakButton: document.querySelector("#resumeBreakButton"),
   endSessionButton: document.querySelector("#endSessionButton"),
+  roomIdDisplay: document.querySelector("#roomIdDisplay"),
   copyInviteButton: document.querySelector("#copyInviteButton"),
+  shareRoomButton: document.querySelector("#shareRoomButton"),
+  sharePanel: document.querySelector("#sharePanel"),
   turnLabel: document.querySelector("#turnLabel"),
   statusSub: document.querySelector("#statusSub"),
   turnTimer: document.querySelector("#turnTimer"),
@@ -104,7 +148,14 @@ function boot() {
   bindEvents();
   renderAvatarSelect(els.hostAvatarInput, new Set(), els.hostAvatarInput.value);
   renderAvatarSelect(els.roomJoinAvatarInput, new Set(), els.roomJoinAvatarInput.value);
+  fillDefaultShutdownWindow();
   loadGlobalData();
+
+  if (state.adminView) {
+    loadPortalData();
+    render();
+    return;
+  }
 
   if (state.roomId) {
     state.playerId = storedPlayerId(state.roomId);
@@ -130,6 +181,7 @@ function bindEvents() {
     state.playerId = result.playerId;
     storePlayerId(state.roomId, state.playerId);
     history.pushState(null, "", `/rooms/${state.roomId}`);
+    state.sharePanelOpen = true;
     subscribe();
     render();
   });
@@ -207,6 +259,11 @@ function bindEvents() {
   els.copyInviteButton.addEventListener("click", async () => {
     await navigator.clipboard.writeText(window.location.href);
     showToast("Invite link copied");
+  });
+
+  els.shareRoomButton.addEventListener("click", () => {
+    state.sharePanelOpen = !state.sharePanelOpen;
+    renderShareControls();
   });
 
   els.passButton.addEventListener("click", async () => {
@@ -301,14 +358,128 @@ function bindEvents() {
     state.settings = result.settings;
     fillSettingsForm(result.settings);
     state.settingsExpanded = false;
-    showToast("Settings saved");
+    showToast("Championship rules saved");
     renderSettings();
   });
 
+  els.portalAdminLoginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const result = await api("/api/admin/login", {
+      method: "POST",
+      body: {
+        email: els.portalAdminEmailInput.value.trim(),
+        password: els.portalAdminPasswordInput.value
+      }
+    });
+
+    state.portalAdminToken = result.token;
+    sessionStorage.setItem("dominoes-portal-admin-token", result.token);
+    els.portalAdminEmailInput.value = "";
+    els.portalAdminPasswordInput.value = "";
+    showToast("Portal admin logged in");
+    await loadPortalData();
+    render();
+  });
+
+  els.adminRefreshButton.addEventListener("click", () => {
+    loadPortalData();
+  });
+
+  els.adminCapacityForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const result = await api("/api/admin/portal-settings", {
+      method: "PUT",
+      headers: portalAdminHeaders(),
+      body: {
+        portalSettings: {
+          maxConcurrentChampionships: Number(els.adminCapacityInput.value),
+          allowNewChampionships: els.adminAllowNewInput.checked
+        }
+      }
+    });
+
+    state.portalData = {
+      ...(state.portalData ?? {}),
+      portalSettings: result.portalSettings
+    };
+    showToast("Capacity settings saved");
+    await loadPortalData();
+  });
+
+  els.adminShutdownForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await api("/api/admin/shutdowns", {
+      method: "POST",
+      headers: portalAdminHeaders(),
+      body: {
+        mode: els.adminShutdownMode.value,
+        startAt: new Date(els.adminShutdownStart.value).getTime(),
+        endAt: new Date(els.adminShutdownEnd.value).getTime(),
+        message: els.adminShutdownMessage.value.trim()
+      }
+    });
+
+    showToast("Shutdown scheduled");
+    fillDefaultShutdownWindow();
+    await loadPortalData();
+    await loadPortalStatus();
+  });
+
+  els.adminBroadcastForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await api("/api/admin/broadcasts", {
+      method: "POST",
+      headers: portalAdminHeaders(),
+      body: {
+        audience: els.adminBroadcastAudience.value,
+        message: els.adminBroadcastMessage.value.trim()
+      }
+    });
+
+    els.adminBroadcastMessage.value = "";
+    showToast("Broadcast sent");
+    await loadPortalData();
+    await loadPortalStatus();
+  });
+
+  els.adminUserProfilePicture.addEventListener("change", () => {
+    readAdminProfilePicture();
+  });
+
+  els.adminUserForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await api("/api/admin/users", {
+      method: "POST",
+      headers: portalAdminHeaders(),
+      body: {
+        adminUser: {
+          firstName: els.adminUserFirstName.value.trim(),
+          lastName: els.adminUserLastName.value.trim(),
+          email: els.adminUserEmail.value.trim(),
+          password: els.adminUserPassword.value,
+          role: els.adminUserRole.value,
+          status: els.adminUserStatus.value,
+          profilePictureDataUrl: state.adminProfilePictureDataUrl
+        }
+      }
+    });
+
+    els.adminUserForm.reset();
+    state.adminProfilePictureDataUrl = "";
+    showToast("Admin user created");
+    await loadPortalData();
+  });
+
   window.addEventListener("popstate", () => {
+    state.adminView = isAdminPath();
     state.roomId = roomIdFromPath();
     state.playerId = state.roomId ? storedPlayerId(state.roomId) : null;
-    loadRoom(state.roomId);
+    if (state.adminView) {
+      loadPortalData();
+      render();
+    } else {
+      loadRoom(state.roomId);
+    }
   });
 
   window.addEventListener("resize", () => {
@@ -349,7 +520,8 @@ async function loadRoom(roomId) {
 async function loadGlobalData() {
   await Promise.all([
     loadStats(),
-    loadSettings()
+    loadSettings(),
+    loadPortalStatus()
   ]);
 }
 
@@ -371,6 +543,58 @@ async function loadSettings() {
   } catch (error) {
     showToast(error.message);
   }
+}
+
+async function loadPortalStatus() {
+  try {
+    state.portalStatus = await api("/api/portal-status");
+    renderPortalNotice();
+  } catch {
+    state.portalStatus = null;
+  }
+}
+
+async function loadPortalData(options = {}) {
+  if (!state.portalAdminToken) {
+    renderAdminPortal();
+    return;
+  }
+
+  try {
+    state.portalData = await api("/api/admin/portal", {
+      headers: portalAdminHeaders()
+    });
+    renderAdminPortal();
+  } catch (error) {
+    state.portalAdminToken = null;
+    state.portalData = null;
+    sessionStorage.removeItem("dominoes-portal-admin-token");
+    if (!options.silent) {
+      showToast(error.message);
+    }
+    renderAdminPortal();
+  }
+}
+
+function startAdminAutoRefresh() {
+  if (state.portalRefreshInterval || !state.portalAdminToken) {
+    return;
+  }
+
+  state.portalRefreshInterval = window.setInterval(() => {
+    if (state.adminView && state.portalAdminToken && document.visibilityState !== "hidden") {
+      loadPortalData({ silent: true });
+    }
+  }, 10_000);
+}
+
+function stopAdminAutoRefresh() {
+  if (!state.portalRefreshInterval) {
+    return;
+  }
+
+  window.clearInterval(state.portalRefreshInterval);
+  state.portalRefreshInterval = null;
 }
 
 async function markReconnected() {
@@ -400,12 +624,48 @@ function subscribe() {
     state.room = JSON.parse(event.data);
     render();
   });
+  state.events.addEventListener("broadcast", (event) => {
+    state.portalStatus = {
+      ...(state.portalStatus ?? {}),
+      latestBroadcast: JSON.parse(event.data)
+    };
+    renderPortalNotice();
+    showToast(state.portalStatus.latestBroadcast.message);
+  });
+  state.events.addEventListener("portal", (event) => {
+    const payload = JSON.parse(event.data);
+    if (payload.type === "shutdown") {
+      state.portalStatus = {
+        ...(state.portalStatus ?? {}),
+        activeShutdown: payload.shutdown
+      };
+      renderPortalNotice();
+      showToast(payload.shutdown.message);
+    }
+  });
   state.events.addEventListener("error", () => {
     showToast("Connection interrupted");
   });
 }
 
 function render() {
+  renderPortalNotice();
+
+  if (state.adminView) {
+    startAdminAutoRefresh();
+    els.setupPanel.classList.add("hidden");
+    els.joinPanel.classList.add("hidden");
+    els.tableView.classList.add("hidden");
+    els.adminPortal.classList.remove("hidden");
+    els.roomLine.textContent = "Admin portal";
+    els.sessionPill.textContent = state.portalAdminToken ? "Logged in" : "Login required";
+    renderAdminPortal();
+    clearTimer();
+    return;
+  }
+
+  stopAdminAutoRefresh();
+  els.adminPortal.classList.add("hidden");
   const hasRoom = Boolean(state.room);
   const seated = state.playerId && isSeated(state.playerId);
 
@@ -469,9 +729,14 @@ function renderPlayers() {
           <div class="player-meta">${role} | ${connected}${handCount === undefined ? "" : ` | ${handCount} tiles`} | ${infractions} inf</div>
         </div>
         <strong>${score}</strong>
+        ${seat.playerId !== state.playerId && !seat.isBot
+          ? `<button class="plain-action player-report-button" type="button" data-player-id="${escapeHtml(seat.playerId)}">Report</button>`
+          : ""}
       </div>
     `;
   }).join("");
+
+  bindPlayerReportButtons();
 
   const botCount = state.room.seats.filter((seat) => seat.isBot).length;
   const showAddBot = state.room.status === "waiting"
@@ -485,7 +750,7 @@ function renderPlayers() {
   const startDisabled = !showStartMatch || state.room.seats.length < ACTIVE_PLAYERS_PER_GAME;
   setButtonVisibility(els.startMatchButton, showStartMatch, startDisabled);
   setButtonVisibility(els.topStartMatchButton, showStartMatch, startDisabled);
-  const breakVisible = state.room.matchLength === 10
+  const breakVisible = [5, 10].includes(state.room.matchLength)
     && Boolean(match)
     && Boolean(match.playerOrder?.includes(state.playerId))
     && state.room.status !== "cancelled"
@@ -511,6 +776,69 @@ function renderPlayers() {
   setButtonVisibility(els.endSessionButton, showEndSession, endDisabled);
   setButtonVisibility(els.topEndSessionButton, showEndSession && !endDisabled, endDisabled);
   els.hostActionBar.classList.toggle("hidden", !showStartMatch && !(showEndSession && !endDisabled));
+  renderShareControls();
+}
+
+function bindPlayerReportButtons() {
+  els.playersList.querySelectorAll(".player-report-button").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const target = state.room.seats.find((seat) => seat.playerId === button.dataset.playerId);
+      const reason = window.prompt(`Report ${target?.name ?? "this player"} for abuse or obscene language:`);
+
+      if (!reason || !reason.trim()) {
+        return;
+      }
+
+      await api(`/api/rooms/${state.roomId}/report-player`, {
+        method: "POST",
+        body: {
+          playerId: state.playerId,
+          targetPlayerId: button.dataset.playerId,
+          reason: reason.trim()
+        }
+      });
+      showToast("Report sent to admin");
+    });
+  });
+}
+
+function renderShareControls() {
+  if (!state.room || !els.roomIdDisplay || !els.sharePanel) {
+    return;
+  }
+
+  const inviteUrl = `${window.location.origin}/rooms/${state.room.id}`;
+  const shareText = `Join my dominoes championship. Room ID: ${state.room.id}. Link: ${inviteUrl}`;
+  const encodedSubject = encodeURIComponent(`Dominoes Room ${state.room.id}`);
+  const encodedUrl = encodeURIComponent(inviteUrl);
+  const encodedText = encodeURIComponent(shareText);
+  const disabled = state.room.status === "cancelled" || state.room.status === "completed";
+
+  els.roomIdDisplay.textContent = `Room ID: ${state.room.id}`;
+  els.copyInviteButton.disabled = disabled;
+  els.shareRoomButton.disabled = disabled;
+  els.sharePanel.classList.toggle("hidden", disabled || !state.sharePanelOpen);
+
+  if (disabled) {
+    return;
+  }
+
+  els.sharePanel.innerHTML = `
+    <a class="share-option" href="mailto:?subject=${encodedSubject}&body=${encodedText}">Email</a>
+    <a class="share-option" href="https://wa.me/?text=${encodedText}" target="_blank" rel="noopener">WhatsApp</a>
+    <a class="share-option" href="https://t.me/share/url?url=${encodedUrl}&text=${encodedText}" target="_blank" rel="noopener">Telegram</a>
+    <button class="share-option" type="button" data-share-copy="instagram">Instagram</button>
+    <a class="share-option" href="https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}" target="_blank" rel="noopener">Facebook</a>
+    <button class="share-option" type="button" data-share-copy="room">Copy Room ID</button>
+  `;
+
+  els.sharePanel.querySelectorAll("[data-share-copy]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const copyText = button.dataset.shareCopy === "room" ? state.room.id : shareText;
+      await navigator.clipboard.writeText(copyText);
+      showToast(button.dataset.shareCopy === "room" ? "Room ID copied" : "Share text copied");
+    });
+  });
 }
 
 async function startMatch() {
@@ -584,17 +912,53 @@ function renderScores() {
         lastRoundPoints === undefined ? null : `Last +${lastRoundPoints}`,
         `${raw} raw${penalty ? `, ${penalty} penalty` : ""}`
       ].filter(Boolean).join(" | ");
+      const streakBadge = playerStreakBadge(match, seat.playerId);
 
       return `
         <div class="score-row">
           <div>
-            <div class="player-name">${escapeHtml(seat.name)}</div>
+            <div class="player-name">${escapeHtml(seat.name)}${streakBadge}</div>
             <div class="score-meta">${meta}</div>
           </div>
           <div class="score-points">${finalScore}</div>
         </div>
       `;
     }).join("");
+}
+
+function playerStreakBadge(match, playerId) {
+  const games = [...(match.completedGames ?? [])].sort((first, second) => first.number - second.number);
+  let winStreak = 0;
+  let lossStreak = 0;
+
+  for (const game of games) {
+    if (game.winnerId === playerId) {
+      winStreak += 1;
+      lossStreak = 0;
+      continue;
+    }
+
+    const placement = game.placements?.find((item) => item.playerId === playerId);
+
+    if (placement?.place === ACTIVE_PLAYERS_PER_GAME) {
+      lossStreak += 1;
+      winStreak = 0;
+      continue;
+    }
+
+    winStreak = 0;
+    lossStreak = 0;
+  }
+
+  if (winStreak >= 2) {
+    return `<span class="streak-badge win-streak" title="${winStreak} round winning streak" aria-label="${winStreak} round winning streak">&#128293;</span>`;
+  }
+
+  if (lossStreak >= 2) {
+    return `<span class="streak-badge loss-streak" title="${lossStreak} round losing streak" aria-label="${lossStreak} round losing streak">&#128296;</span>`;
+  }
+
+  return "";
 }
 
 function renderTable() {
@@ -686,7 +1050,7 @@ function renderTable() {
 
   const selectedEnds = selectedTile ? playableEnds(selectedTile, game) : [];
 
-  els.board.className = "board";
+  els.board.className = game.board.plays.length >= 11 ? "board board-crowded" : "board";
   els.board.dataset.tileCount = String(game.board.plays.length);
   els.board.innerHTML = renderTableSeats(match) + renderSeedReveal(match) + renderPlayAnimation(match);
   void renderPixiBoard(els.board, {
@@ -724,9 +1088,11 @@ function renderTableSeats(match) {
 
 function renderPlayAnimation(match) {
   const action = match?.lastAction ?? match?.game?.lastAction;
+  const player = state.room.seats.find((seat) => seat.playerId === action?.playerId);
   const iAmLobby = Boolean(match?.game && !match.playerOrder.includes(state.playerId));
+  const isBotAction = Boolean(player?.isBot);
 
-  if (!iAmLobby || !action || !["play", "timeoutAutoPlay"].includes(action.type) || !action.move) {
+  if ((!iAmLobby && !isBotAction) || !action || !["play", "timeoutAutoPlay"].includes(action.type) || !action.move) {
     return "";
   }
 
@@ -744,14 +1110,13 @@ function renderPlayAnimation(match) {
   }
 
   state.lastAnimatedActionKey = actionKey;
-  const player = state.room.seats.find((seat) => seat.playerId === action.playerId);
   const tile = {
     high: Number.isFinite(action.move.high) ? action.move.high : action.move.leftValue,
     low: Number.isFinite(action.move.low) ? action.move.low : action.move.rightValue
   };
 
   return `
-    <div class="play-animation-banner" data-action-key="${escapeHtml(actionKey)}" role="status" aria-live="polite">
+    <div class="play-animation-banner ${isBotAction ? "bot-play" : ""}" data-action-key="${escapeHtml(actionKey)}" role="status" aria-live="polite">
       ${avatarHtml(player?.avatarId, "play-animation-avatar")}
       <div>
         <strong>${escapeHtml(playerName(action.playerId))}</strong>
@@ -817,12 +1182,13 @@ function renderChat() {
     <div class="chat-message">
       <div class="chat-message-head">
         <div class="chat-name">${escapeHtml(playerName(message.playerId))}</div>
-        ${hostCanModerate ? `
-          <div class="chat-actions">
+        <div class="chat-actions">
+          ${message.playerId !== state.playerId ? `<button class="plain-action chat-report-button" type="button" data-message-id="${escapeHtml(message.id)}" data-player-id="${escapeHtml(message.playerId)}">Report</button>` : ""}
+          ${hostCanModerate ? `
             <button class="plain-action chat-delete-button" type="button" data-message-id="${escapeHtml(message.id)}">Delete</button>
             ${message.playerId !== state.room.hostPlayerId ? `<button class="plain-action chat-block-button" type="button" data-player-id="${escapeHtml(message.playerId)}">Mute ${CHAT_BLOCK_MINUTES}m</button>` : ""}
-          </div>
-        ` : ""}
+          ` : ""}
+        </div>
       </div>
       <div>${escapeHtml(message.text)}</div>
     </div>
@@ -832,6 +1198,26 @@ function renderChat() {
 }
 
 function bindChatModerationControls() {
+  els.chatLog.querySelectorAll(".chat-report-button").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        await api(`/api/rooms/${state.roomId}/report-player`, {
+          method: "POST",
+          body: {
+            playerId: state.playerId,
+            targetPlayerId: button.dataset.playerId,
+            messageId: button.dataset.messageId,
+            reason: "Peer reported chat message"
+          }
+        });
+
+        showToast("Report sent to admin");
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+  });
+
   els.chatLog.querySelectorAll(".chat-delete-button").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
@@ -921,7 +1307,6 @@ function renderSettings() {
     && state.playerId
     && state.room.hostPlayerId === state.playerId
     && state.room.status === "waiting"
-    && state.room.seats.length >= ACTIVE_PLAYERS_PER_GAME
     && !state.room.match
   );
 
@@ -938,6 +1323,299 @@ function renderSettings() {
   els.settingsToggleButton.textContent = isExpanded ? "Minimize" : "Expand";
   els.adminLoginForm.classList.toggle("hidden", !isExpanded || isLoggedIn);
   els.settingsForm.classList.toggle("hidden", !isExpanded || !isLoggedIn);
+}
+
+function renderPortalNotice() {
+  if (!els.portalNotice) {
+    return;
+  }
+
+  if (state.portalNoticeTimer) {
+    window.clearTimeout(state.portalNoticeTimer);
+    state.portalNoticeTimer = null;
+  }
+
+  const shutdown = state.portalStatus?.activeShutdown;
+  let broadcast = state.portalStatus?.latestBroadcast;
+
+  if (broadcast && Number(broadcast.expiresAt ?? 0) <= Date.now()) {
+    broadcast = null;
+    state.portalStatus = {
+      ...(state.portalStatus ?? {}),
+      latestBroadcast: null
+    };
+  }
+
+  const notice = shutdown
+    ? `Portal maintenance: ${shutdown.message} Ends ${formatDateTime(shutdown.endAt)}`
+    : broadcast?.message ?? "";
+
+  els.portalNotice.classList.toggle("hidden", !notice);
+  els.portalNotice.textContent = notice;
+
+  if (broadcast?.expiresAt) {
+    state.portalNoticeTimer = window.setTimeout(() => {
+      state.portalStatus = {
+        ...(state.portalStatus ?? {}),
+        latestBroadcast: null
+      };
+      renderPortalNotice();
+    }, Math.max(0, Number(broadcast.expiresAt) - Date.now()));
+  }
+}
+
+function renderAdminPortal() {
+  if (!els.adminPortal) {
+    return;
+  }
+
+  const loggedIn = Boolean(state.portalAdminToken && state.portalData);
+  els.portalAdminLoginForm.classList.toggle("hidden", loggedIn);
+  els.adminDashboard.classList.toggle("hidden", !loggedIn);
+
+  if (!loggedIn) {
+    return;
+  }
+
+  renderAdminMetrics();
+  renderAdminReports();
+  renderAdminRooms();
+  renderAdminShutdowns();
+  renderAdminBroadcasts();
+  renderAdminCapacity();
+  renderAdminUsers();
+  renderAdminAudit();
+}
+
+function renderAdminMetrics() {
+  const data = state.portalData;
+  const openReports = data.reports?.length ?? 0;
+  const rooms = data.rooms ?? [];
+  const activeRooms = data.metrics?.activeChampionships ?? rooms.filter((room) => room.status === "active").length;
+  const connectedUsers = data.metrics?.connectedPlayers
+    ?? rooms.reduce((sum, room) => sum + Number(room.connectedPlayers ?? 0), 0);
+  const capacity = data.capacity ?? {};
+
+  els.adminMetrics.innerHTML = [
+    ["Active", activeRooms],
+    ["Connected", connectedUsers],
+    ["Flags", openReports],
+    ["Capacity", `${capacity.openChampionships ?? 0}/${capacity.maxConcurrentChampionships ?? 30}`]
+  ].map(([label, value]) => `
+    <div class="admin-metric">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `).join("");
+}
+
+function renderAdminReports() {
+  const reports = state.portalData?.reports ?? [];
+
+  els.adminReportsList.innerHTML = reports.length
+    ? reports.map((report) => `
+      <article class="admin-card">
+        <div class="admin-card-head">
+          <strong>${escapeHtml(report.targetName || report.targetPlayerId)}</strong>
+          <span>${escapeHtml(report.source)} | ${formatDateTime(report.createdAt)}</span>
+        </div>
+        <p>${escapeHtml(report.reason)}</p>
+        ${report.messageText ? `<blockquote>${escapeHtml(report.messageText)}</blockquote>` : ""}
+        <div class="admin-meta">Room ${escapeHtml(report.roomId)}${report.reporterName ? ` | Reported by ${escapeHtml(report.reporterName)}` : ""}</div>
+        <div class="admin-actions">
+          <button class="small-button admin-report-action" type="button" data-report-id="${escapeHtml(report.id)}" data-action="dismiss">Dismiss</button>
+          <button class="small-button admin-player-action" type="button" data-report-id="${escapeHtml(report.id)}" data-room-id="${escapeHtml(report.roomId)}" data-player-id="${escapeHtml(report.targetPlayerId)}" data-action="warn">Warn</button>
+          <button class="small-button admin-player-action" type="button" data-report-id="${escapeHtml(report.id)}" data-room-id="${escapeHtml(report.roomId)}" data-player-id="${escapeHtml(report.targetPlayerId)}" data-action="mute">Mute 10m</button>
+          <button class="small-button danger-button admin-player-action" type="button" data-report-id="${escapeHtml(report.id)}" data-room-id="${escapeHtml(report.roomId)}" data-player-id="${escapeHtml(report.targetPlayerId)}" data-action="remove">Remove</button>
+        </div>
+      </article>
+    `).join("")
+    : `<div class="admin-empty">No open reports.</div>`;
+
+  bindAdminActionButtons();
+}
+
+function renderAdminRooms() {
+  const rooms = state.portalData?.rooms ?? [];
+
+  els.adminRoomsList.innerHTML = rooms.length
+    ? rooms.map((room) => `
+      <article class="admin-card">
+        <div class="admin-card-head">
+          <strong>Room ${escapeHtml(room.id)}</strong>
+          <span>${escapeHtml(room.status)}</span>
+        </div>
+        <div class="admin-meta">Host ${escapeHtml(room.hostName)} | ${room.players} joined | ${room.activePlayers} active | ${room.lobbyPlayers} lobby</div>
+        <div class="admin-meta">Connected: ${(room.connectedPlayerNames ?? []).map(escapeHtml).join(", ") || "none"}</div>
+        <div class="admin-meta">${room.currentGameNumber ? `Round ${room.currentGameNumber}` : `${room.matchLength}-game championship`}</div>
+        <div class="admin-actions">
+          <button class="small-button danger-button admin-room-end" type="button" data-room-id="${escapeHtml(room.id)}">End Championship</button>
+        </div>
+      </article>
+    `).join("")
+    : `<div class="admin-empty">No live championships.</div>`;
+
+  bindAdminActionButtons();
+}
+
+function renderAdminShutdowns() {
+  const shutdowns = state.portalData?.shutdownWindows ?? [];
+
+  els.adminShutdownList.innerHTML = shutdowns.length
+    ? shutdowns.slice(0, 6).map((shutdown) => `
+      <div class="admin-list-row">
+        <strong>${escapeHtml(shutdown.mode)}</strong>
+        <span>${formatDateTime(shutdown.startAt)} - ${formatDateTime(shutdown.endAt)}</span>
+      </div>
+    `).join("")
+    : `<div class="admin-empty">No shutdowns scheduled.</div>`;
+}
+
+function renderAdminBroadcasts() {
+  const broadcasts = state.portalData?.broadcasts ?? [];
+
+  els.adminBroadcastList.innerHTML = broadcasts.length
+    ? broadcasts.slice(0, 6).map((broadcast) => `
+      <div class="admin-list-row">
+        <strong>${escapeHtml(broadcast.audience)}</strong>
+        <span>${escapeHtml(broadcast.message)}</span>
+      </div>
+    `).join("")
+    : `<div class="admin-empty">No recent broadcasts.</div>`;
+}
+
+function renderAdminCapacity() {
+  const settings = state.portalData?.portalSettings;
+
+  if (!settings) {
+    return;
+  }
+
+  els.adminCapacityInput.value = settings.maxConcurrentChampionships;
+  els.adminAllowNewInput.checked = settings.allowNewChampionships;
+}
+
+function renderAdminUsers() {
+  const users = state.portalData?.adminUsers ?? [];
+
+  els.adminUsersList.innerHTML = users.length
+    ? users.map((user) => `
+      <article class="admin-card admin-user-card">
+        <div class="admin-card-head">
+          <div class="admin-user-head">
+            ${user.profilePictureDataUrl
+              ? `<img class="admin-avatar" alt="" src="${escapeHtml(user.profilePictureDataUrl)}">`
+              : `<span class="admin-avatar admin-avatar-fallback">${escapeHtml((user.firstName?.[0] ?? "A").toUpperCase())}</span>`}
+            <div>
+              <strong>${escapeHtml([user.firstName, user.lastName].filter(Boolean).join(" ") || user.email)}</strong>
+              <div class="admin-meta">${escapeHtml(user.email)} | ${escapeHtml(user.role)}</div>
+            </div>
+          </div>
+          <span>${escapeHtml(user.status)}</span>
+        </div>
+        <div class="admin-actions">
+          <button class="small-button admin-user-status" type="button" data-admin-user-id="${escapeHtml(user.id)}" data-status="${user.status === "active" ? "inactive" : "active"}">
+            Set ${user.status === "active" ? "Inactive" : "Active"}
+          </button>
+        </div>
+      </article>
+    `).join("")
+    : `<div class="admin-empty">No admin users yet.</div>`;
+
+  bindAdminUserButtons();
+}
+
+function renderAdminAudit() {
+  const actions = state.portalData?.auditLog ?? [];
+
+  els.adminAuditList.innerHTML = actions.length
+    ? actions.map((action) => `
+      <div class="admin-list-row">
+        <strong>${escapeHtml(action.type)}</strong>
+        <span>${escapeHtml(action.summary)} | ${formatDateTime(action.at)}</span>
+      </div>
+    `).join("")
+    : `<div class="admin-empty">No admin actions yet.</div>`;
+}
+
+function bindAdminUserButtons() {
+  els.adminUsersList.querySelectorAll(".admin-user-status").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await api("/api/admin/users/status", {
+        method: "PUT",
+        headers: portalAdminHeaders(),
+        body: {
+          adminUserId: button.dataset.adminUserId,
+          status: button.dataset.status
+        }
+      });
+      showToast("Admin status updated");
+      await loadPortalData();
+    });
+  });
+}
+
+function bindAdminActionButtons() {
+  els.adminReportsList.querySelectorAll(".admin-report-action").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await api("/api/admin/reports/action", {
+        method: "POST",
+        headers: portalAdminHeaders(),
+        body: {
+          reportId: button.dataset.reportId,
+          status: button.dataset.action === "dismiss" ? "dismissed" : "reviewed",
+          resolution: button.dataset.action
+        }
+      });
+      showToast("Report updated");
+      await loadPortalData();
+    });
+  });
+
+  document.querySelectorAll(".admin-player-action").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const action = button.dataset.action;
+      const confirmed = action === "remove"
+        ? window.confirm("Remove this player? Active table removals cancel that championship.")
+        : true;
+
+      if (!confirmed) {
+        return;
+      }
+
+      await api("/api/admin/player-action", {
+        method: "POST",
+        headers: portalAdminHeaders(),
+        body: {
+          roomId: button.dataset.roomId,
+          targetPlayerId: button.dataset.playerId,
+          reportId: button.dataset.reportId,
+          action,
+          minutes: 10,
+          reason: "Portal moderation"
+        }
+      });
+      showToast("Admin action applied");
+      await loadPortalData();
+    });
+  });
+
+  els.adminRoomsList.querySelectorAll(".admin-room-end").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await api("/api/admin/player-action", {
+        method: "POST",
+        headers: portalAdminHeaders(),
+        body: {
+          roomId: button.dataset.roomId,
+          targetPlayerId: state.portalData.rooms.find((room) => room.id === button.dataset.roomId)?.hostPlayerId,
+          action: "remove",
+          reason: "Admin ended championship"
+        }
+      });
+      showToast("Championship ended");
+      await loadPortalData();
+    });
+  });
 }
 
 function renderBetweenGameResults(match) {
@@ -1031,7 +1709,7 @@ function renderEndedSessionControls() {
   return `
     <div class="empty-board session-ended-panel">
       <strong>Session ended</strong>
-      ${isHost ? `<button id="newSessionButton" type="button">New Session</button>` : ""}
+      ${isHost ? `<button class="new-session-button" id="newSessionButton" type="button">New Session</button>` : ""}
     </div>
   `;
 }
@@ -1704,6 +2382,66 @@ async function api(path, options = {}) {
   return data;
 }
 
+function portalAdminHeaders() {
+  return {
+    Authorization: `Bearer ${state.portalAdminToken}`
+  };
+}
+
+function fillDefaultShutdownWindow() {
+  if (!els.adminShutdownStart || !els.adminShutdownEnd) {
+    return;
+  }
+
+  const start = new Date(Date.now() + 10 * 60_000);
+  const end = new Date(start.getTime() + 24 * 60 * 60_000);
+  els.adminShutdownStart.value = localDateTimeValue(start);
+  els.adminShutdownEnd.value = localDateTimeValue(end);
+}
+
+function readAdminProfilePicture() {
+  const file = els.adminUserProfilePicture.files?.[0];
+
+  if (!file) {
+    state.adminProfilePictureDataUrl = "";
+    return;
+  }
+
+  if (!file.type.startsWith("image/") || file.size > 180_000) {
+    els.adminUserProfilePicture.value = "";
+    state.adminProfilePictureDataUrl = "";
+    showToast("Use an image under 180 KB");
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    state.adminProfilePictureDataUrl = String(reader.result ?? "");
+  });
+  reader.readAsDataURL(file);
+}
+
+function localDateTimeValue(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function formatDateTime(value) {
+  const date = new Date(Number(value));
+
+  if (Number.isNaN(date.getTime())) {
+    return "not set";
+  }
+
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
 function fillSettingsForm(settings) {
   if (!settings) {
     return;
@@ -1775,6 +2513,10 @@ function sendExitSignal() {
 function roomIdFromPath() {
   const match = window.location.pathname.match(/^\/rooms\/([^/]+)/);
   return match ? decodeURIComponent(match[1]) : null;
+}
+
+function isAdminPath() {
+  return window.location.pathname === "/admin" || window.location.pathname.startsWith("/admin/");
 }
 
 function storedPlayerId(roomId) {
@@ -1906,7 +2648,7 @@ function registerServiceWorker() {
     return;
   }
 
-  navigator.serviceWorker.register("/sw.js?v=40").catch(() => {});
+    navigator.serviceWorker.register("/sw.js?v=44").catch(() => {});
 }
 
 function showToast(message) {

@@ -24,6 +24,7 @@ import {
   disconnectRoomPlayer,
   joinRoom,
   reconnectRoomPlayer,
+  removeRoomPlayer,
   replaceRoomMatch,
   requestRoomRematch,
   roomInviteUrl,
@@ -48,6 +49,7 @@ const PUBLIC_DIR = join(__dirname, "..", "public");
 export function createAppServer(options = {}) {
   const rooms = new Map();
   const timers = new Map();
+  const portalTimers = new Set();
   const sseClients = new Map();
   const adminSessions = new Map();
   const rng = options.rng ?? Math.random;
@@ -67,6 +69,7 @@ export function createAppServer(options = {}) {
           requestUrl,
           rooms,
           timers,
+          portalTimers,
           sseClients,
           adminSessions,
           statsStore,
@@ -84,6 +87,10 @@ export function createAppServer(options = {}) {
   server.rooms = rooms;
   server.closeApp = () => {
     for (const timer of timers.values()) {
+      clearTimeout(timer);
+    }
+
+    for (const timer of portalTimers.values()) {
       clearTimeout(timer);
     }
 
@@ -118,6 +125,11 @@ async function handleApiRequest(context) {
     return;
   }
 
+  if (request.method === "GET" && requestUrl.pathname === "/api/portal-status") {
+    await portalStatusHandler(context);
+    return;
+  }
+
   if (request.method === "GET" && requestUrl.pathname === "/api/settings") {
     const settings = await context.statsStore.getSettings();
     sendJson(response, 200, { settings });
@@ -126,6 +138,46 @@ async function handleApiRequest(context) {
 
   if (request.method === "POST" && requestUrl.pathname === "/api/admin/login") {
     await adminLoginHandler(context);
+    return;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/api/admin/portal") {
+    await adminPortalHandler(context);
+    return;
+  }
+
+  if (request.method === "PUT" && requestUrl.pathname === "/api/admin/portal-settings") {
+    await updatePortalSettingsHandler(context);
+    return;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/admin/reports/action") {
+    await adminReportActionHandler(context);
+    return;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/admin/player-action") {
+    await adminPlayerActionHandler(context);
+    return;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/admin/shutdowns") {
+    await adminShutdownHandler(context);
+    return;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/admin/broadcasts") {
+    await adminBroadcastHandler(context);
+    return;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/admin/users") {
+    await adminUserCreateHandler(context);
+    return;
+  }
+
+  if (request.method === "PUT" && requestUrl.pathname === "/api/admin/users/status") {
+    await adminUserStatusHandler(context);
     return;
   }
 
@@ -195,6 +247,11 @@ async function handleApiRequest(context) {
     return;
   }
 
+  if (action === "report-player") {
+    await reportPlayerHandler(context, roomId);
+    return;
+  }
+
   if (action === "delete-chat-message") {
     await deleteChatMessageHandler(context, roomId);
     return;
@@ -251,6 +308,13 @@ async function handleApiRequest(context) {
 async function createRoomHandler(context) {
   const { request, response, requestUrl, rooms } = context;
   const body = await readJsonBody(request);
+  const portalBlock = await newChampionshipBlockReason(context, { creatingRoom: true });
+
+  if (portalBlock) {
+    sendError(response, 403, portalBlock);
+    return;
+  }
+
   const hostId = body.hostId ?? createId("player");
   const room = createRoom({
     id: body.roomId ?? createId("room"),
@@ -274,10 +338,41 @@ async function createRoomHandler(context) {
 async function adminLoginHandler(context) {
   const { request, response, adminSessions, statsStore, rooms } = context;
   const body = await readJsonBody(request);
+
+  if (!body.roomId) {
+    const adminUser = await statsStore.authenticatePortalAdmin({
+      email: body.email,
+      password: body.password
+    });
+
+    if (!adminUser) {
+      sendError(response, 401, "Invalid admin password.");
+      return;
+    }
+
+    const token = createId("admin");
+    adminSessions.set(token, {
+      scope: "portal",
+      adminUserId: adminUser.id,
+      role: adminUser.role,
+      email: adminUser.email,
+      createdAt: Date.now()
+    });
+    await statsStore.recordAdminAction({
+      type: "adminLogin",
+      adminTokenId: token,
+      targetName: `${adminUser.firstName} ${adminUser.lastName}`.trim() || adminUser.email,
+      summary: `${adminUser.role} admin logged in`,
+      at: Date.now()
+    });
+    sendJson(response, 200, { token, scope: "portal", adminUser });
+    return;
+  }
+
   const room = requireRoom(rooms, body.roomId);
 
   if (!canEditSettingsForRoom(room)) {
-    sendError(response, 403, "Settings can only be edited after at least 4 players join and before Start Match.");
+    sendError(response, 403, "Championship rules can only be edited by the host before Start Match.");
     return;
   }
 
@@ -293,11 +388,12 @@ async function adminLoginHandler(context) {
 
   const token = createId("admin");
   adminSessions.set(token, {
+    scope: "settings",
     roomId: room.id,
     playerId: body.playerId,
     createdAt: Date.now()
   });
-  sendJson(response, 200, { token });
+  sendJson(response, 200, { token, scope: "settings" });
 }
 
 async function updateSettingsHandler(context) {
@@ -306,19 +402,19 @@ async function updateSettingsHandler(context) {
   const session = token ? adminSessions.get(token) : null;
 
   if (!token || !session) {
-    sendError(response, 401, "Admin login required.");
+    sendError(response, 401, "Championship rules login required.");
     return;
   }
 
   const room = rooms.get(session.roomId);
 
   if (!room || room.hostPlayerId !== session.playerId) {
-    sendError(response, 403, "Settings session is no longer valid for this host.");
+    sendError(response, 403, "Championship rules session is no longer valid for this host.");
     return;
   }
 
   if (!canEditSettingsForRoom(room)) {
-    sendError(response, 403, "Settings are locked once Start Match is clicked.");
+    sendError(response, 403, "Championship rules are locked once Start Match is clicked.");
     return;
   }
 
@@ -326,6 +422,221 @@ async function updateSettingsHandler(context) {
   const settings = await statsStore.updateSettings(body.settings ?? body);
 
   sendJson(response, 200, { settings });
+}
+
+async function portalStatusHandler(context) {
+  const { response, statsStore } = context;
+  const snapshot = await statsStore.getPortalSnapshot(Date.now());
+  const latestBroadcast = snapshot.broadcasts.find((broadcast) => Number(broadcast.expiresAt ?? 0) > Date.now()) ?? null;
+
+  sendJson(response, 200, {
+    activeShutdown: snapshot.activeShutdown,
+    latestBroadcast,
+    portalSettings: snapshot.portalSettings,
+    openChampionships: openRoomCount(context.rooms)
+  });
+}
+
+async function adminPortalHandler(context) {
+  const { response, rooms, statsStore } = context;
+  const session = requirePortalAdmin(context);
+  const snapshot = await statsStore.getPortalSnapshot(Date.now());
+  const liveRooms = [...rooms.values()].filter(isLiveAdminRoom);
+
+  sendJson(response, 200, {
+    ...snapshot,
+    session: {
+      scope: session.scope,
+      role: session.role,
+      adminUserId: session.adminUserId,
+      email: session.email,
+      createdAt: session.createdAt
+    },
+    capacity: {
+      openChampionships: openRoomCount(rooms),
+      maxConcurrentChampionships: snapshot.portalSettings.maxConcurrentChampionships
+    },
+    metrics: {
+      activeChampionships: liveRooms.filter((room) => room.status === "active").length,
+      waitingChampionships: liveRooms.filter((room) => room.status === "waiting").length,
+      connectedPlayers: liveRooms.reduce((sum, room) => sum + connectedHumanSeats(room).length, 0),
+      bots: liveRooms.reduce((sum, room) => sum + room.seats.filter((seat) => seat.isBot).length, 0)
+    },
+    rooms: liveRooms.map(serializeAdminRoom)
+  });
+}
+
+async function updatePortalSettingsHandler(context) {
+  const { request, response, statsStore } = context;
+  const session = requirePortalAdmin(context, ["owner", "manager"]);
+  const body = await readJsonBody(request);
+  const portalSettings = await statsStore.updatePortalSettings(body.portalSettings ?? body, {
+    adminTokenId: session.token,
+    now: Date.now()
+  });
+
+  sendJson(response, 200, { portalSettings });
+}
+
+async function adminReportActionHandler(context) {
+  const { request, response, statsStore } = context;
+  const session = requirePortalAdmin(context, ["owner", "manager", "moderator"]);
+  const body = await readJsonBody(request);
+  const report = await statsStore.resolveModerationReport(String(body.reportId ?? ""), {
+    status: body.status ?? "reviewed",
+    resolution: body.resolution ?? body.status ?? "reviewed",
+    adminTokenId: session.token,
+    now: Date.now()
+  });
+
+  sendJson(response, 200, { report });
+}
+
+async function adminPlayerActionHandler(context) {
+  const { request, response, rooms, statsStore, sseClients, timers } = context;
+  const session = requirePortalAdmin(context, ["owner", "manager", "moderator"]);
+  const body = await readJsonBody(request);
+  const room = requireRoom(rooms, body.roomId);
+  const targetSeat = room.seats.find((seat) => seat.playerId === body.targetPlayerId);
+
+  if (!targetSeat) {
+    sendError(response, 404, "Player is not in this championship.");
+    return;
+  }
+
+  const action = String(body.action ?? "");
+  let nextRoom = room;
+  let summary = "";
+
+  if (action === "warn") {
+    summary = `Warned ${targetSeat.name}: ${String(body.reason ?? "moderation warning").slice(0, 140)}`;
+  } else if (action === "mute") {
+    if (!room.match) {
+      sendError(response, 400, "Player can only be muted after chat starts.");
+      return;
+    }
+
+    const match = blockPlayerChat(room.match, body.targetPlayerId, {
+      now: Date.now(),
+      minutes: chatBlockMinutes(body.minutes ?? DEFAULT_CHAT_BLOCK_MINUTES)
+    });
+    nextRoom = replaceRoomMatch(room, match);
+    summary = `Muted ${targetSeat.name} for ${chatBlockMinutes(body.minutes ?? DEFAULT_CHAT_BLOCK_MINUTES)} minutes`;
+  } else if (action === "remove") {
+    nextRoom = removeRoomPlayer(room, body.targetPlayerId, {
+      now: Date.now(),
+      reason: "adminRemovedPlayer"
+    });
+    summary = nextRoom.status === "cancelled"
+      ? `Removed active player ${targetSeat.name}; championship cancelled`
+      : `Removed lobby player ${targetSeat.name}`;
+  } else {
+    sendError(response, 400, "Choose a valid admin action.");
+    return;
+  }
+
+  if (nextRoom.status === "cancelled") {
+    if (timers.has(room.id)) {
+      clearTimeout(timers.get(room.id));
+      timers.delete(room.id);
+    }
+
+    rooms.delete(room.id);
+  } else {
+    rooms.set(room.id, nextRoom);
+    scheduleRoomTimer(context, nextRoom);
+  }
+
+  broadcastRoom(context, nextRoom);
+  if (nextRoom.status === "cancelled") {
+    closeRoomEventStreams(sseClients, room.id);
+  }
+
+  await statsStore.recordAdminAction({
+    type: `player${capitalize(action)}`,
+    adminTokenId: session.token,
+    roomId: room.id,
+    targetPlayerId: body.targetPlayerId,
+    targetName: targetSeat.name,
+    summary,
+    at: Date.now()
+  });
+
+  if (body.reportId) {
+    await statsStore.resolveModerationReport(String(body.reportId), {
+      status: "actioned",
+      resolution: action,
+      adminTokenId: session.token,
+      now: Date.now()
+    }).catch(() => null);
+  }
+
+  sendJson(response, 200, {
+    room: serializeRoom(nextRoom, null),
+    summary
+  });
+}
+
+async function adminShutdownHandler(context) {
+  const { request, response, statsStore } = context;
+  const session = requirePortalAdmin(context, ["owner", "manager"]);
+  const body = await readJsonBody(request);
+  const shutdown = await statsStore.createShutdownWindow({
+    mode: body.mode,
+    message: body.message,
+    startAt: Number(body.startAt),
+    endAt: Number(body.endAt),
+    adminTokenId: session.token,
+    now: Date.now()
+  });
+
+  schedulePortalShutdown(context, shutdown);
+
+  if (shutdown.startAt <= Date.now() && shutdown.endAt > Date.now()) {
+    await applyShutdownWindow(context, shutdown);
+  }
+
+  sendJson(response, 200, { shutdown });
+}
+
+async function adminBroadcastHandler(context) {
+  const { request, response, statsStore } = context;
+  const session = requirePortalAdmin(context, ["owner", "manager"]);
+  const body = await readJsonBody(request);
+  const broadcast = await statsStore.createBroadcast({
+    audience: body.audience,
+    message: body.message,
+    expiresAt: body.expiresAt ?? Date.now() + 60_000,
+    adminTokenId: session.token,
+    now: Date.now()
+  });
+
+  broadcastAllRooms(context, "broadcast", broadcast);
+  sendJson(response, 200, { broadcast });
+}
+
+async function adminUserCreateHandler(context) {
+  const { request, response, statsStore } = context;
+  const session = requirePortalAdmin(context, ["owner", "manager"]);
+  const body = await readJsonBody(request);
+  const adminUser = await statsStore.createAdminUser(body.adminUser ?? body, {
+    adminTokenId: session.token,
+    now: Date.now()
+  });
+
+  sendJson(response, 201, { adminUser });
+}
+
+async function adminUserStatusHandler(context) {
+  const { request, response, statsStore } = context;
+  const session = requirePortalAdmin(context, ["owner", "manager"]);
+  const body = await readJsonBody(request);
+  const adminUser = await statsStore.updateAdminUserStatus(String(body.adminUserId ?? ""), body.status, {
+    adminTokenId: session.token,
+    now: Date.now()
+  });
+
+  sendJson(response, 200, { adminUser });
 }
 
 async function joinRoomHandler(context, roomId) {
@@ -404,6 +715,13 @@ async function startRoomHandler(context, roomId) {
 
   if (body.playerId !== room.hostPlayerId) {
     sendError(response, 403, "Only the host can start the match.");
+    return;
+  }
+
+  const portalBlock = await newChampionshipBlockReason(context);
+
+  if (portalBlock) {
+    sendError(response, 403, portalBlock);
     return;
   }
 
@@ -497,10 +815,16 @@ async function passTurnHandler(context, roomId) {
 }
 
 async function chatHandler(context, roomId) {
-  const { request, response, rooms } = context;
+  const { request, response, rooms, statsStore } = context;
   const body = await readJsonBody(request);
   const room = requireRoom(rooms, roomId);
   const now = Date.now();
+  const seat = room.seats.find((item) => item.playerId === body.playerId);
+
+  if (!seat) {
+    sendError(response, 403, "Player is not in this championship.");
+    return;
+  }
 
   if (!room.match) {
     sendError(response, 400, "Chat is available after the match starts.");
@@ -513,6 +837,16 @@ async function chatHandler(context, roomId) {
   }
 
   if (containsOffensiveLanguage(body.text)) {
+    await statsStore.createModerationReport({
+      source: "system",
+      roomId,
+      roomStatus: room.status,
+      targetPlayerId: body.playerId,
+      targetName: seat.name,
+      messageText: body.text,
+      reason: "Blocked obscene language in chat",
+      now
+    });
     sendError(response, 400, "Message contains blocked language.");
     return;
   }
@@ -529,6 +863,41 @@ async function chatHandler(context, roomId) {
   sendJson(response, 200, {
     room: serializeRoom(nextRoom, body.playerId)
   });
+}
+
+async function reportPlayerHandler(context, roomId) {
+  const { request, response, rooms, statsStore } = context;
+  const body = await readJsonBody(request);
+  const room = requireRoom(rooms, roomId);
+  const reporter = room.seats.find((seat) => seat.playerId === body.playerId);
+  const target = room.seats.find((seat) => seat.playerId === body.targetPlayerId);
+
+  if (!reporter) {
+    sendError(response, 403, "Only seated players can submit a report.");
+    return;
+  }
+
+  if (!target) {
+    sendError(response, 404, "Reported player is not in this championship.");
+    return;
+  }
+
+  const message = room.match?.chatMessages?.find((item) => item.id === body.messageId) ?? null;
+  const report = await statsStore.createModerationReport({
+    source: "peer",
+    roomId,
+    roomStatus: room.status,
+    reporterPlayerId: reporter.playerId,
+    reporterName: reporter.name,
+    targetPlayerId: target.playerId,
+    targetName: target.name,
+    messageId: message?.id ?? body.messageId ?? null,
+    messageText: message?.text ?? body.messageText ?? "",
+    reason: body.reason ?? "Peer report",
+    now: Date.now()
+  });
+
+  sendJson(response, 200, { report });
 }
 
 async function deleteChatMessageHandler(context, roomId) {
@@ -694,6 +1063,13 @@ async function newMatchHandler(context, roomId) {
   const { request, response, rooms, rng, statsStore } = context;
   const body = await readJsonBody(request);
   const room = requireRoom(rooms, roomId);
+  const portalBlock = await newChampionshipBlockReason(context, { creatingRoom: true });
+
+  if (portalBlock) {
+    sendError(response, 403, portalBlock);
+    return;
+  }
+
   const nextRoom = requestRoomRematch(room, body.playerId, {
     now: Date.now(),
     matchLength: Number(body.matchLength),
@@ -1006,6 +1382,12 @@ function broadcastRoom(context, room) {
   broadcastEvent(context, room.id, "room", null, room);
 }
 
+function broadcastAllRooms(context, event, payload) {
+  for (const roomId of context.sseClients.keys()) {
+    broadcastEvent(context, roomId, event, payload);
+  }
+}
+
 function broadcastEvent(context, roomId, event, payload, room = null) {
   const clients = context.sseClients.get(roomId);
 
@@ -1043,6 +1425,121 @@ async function recordCompletedRoom(context, room) {
   }
 
   await context.statsStore.recordCompletedMatch(room);
+}
+
+async function newChampionshipBlockReason(context, options = {}) {
+  const now = Date.now();
+  const portalSettings = await context.statsStore.getPortalSettings();
+  const shutdown = await context.statsStore.getActiveShutdown(now);
+
+  if (!portalSettings.allowNewChampionships) {
+    return "New championships are temporarily disabled by the portal admin.";
+  }
+
+  if (shutdown) {
+    return shutdown.message || "The portal is temporarily unavailable.";
+  }
+
+  const openCount = openRoomCount(context.rooms);
+  const max = portalSettings.maxConcurrentChampionships;
+
+  if (options.creatingRoom ? openCount >= max : openCount > max) {
+    return `The portal is at capacity (${max} championships). Try again soon.`;
+  }
+
+  return null;
+}
+
+function openRoomCount(rooms) {
+  return [...rooms.values()].filter((room) => ["waiting", "active"].includes(room.status)).length;
+}
+
+function requirePortalAdmin(context, allowedRoles = []) {
+  const token = authorizationToken(context.request);
+  const session = token ? context.adminSessions.get(token) : null;
+
+  if (!token || !session || session.scope !== "portal") {
+    throw new HttpError(401, "Portal admin login required.");
+  }
+
+  if (allowedRoles.length > 0 && !allowedRoles.includes(session.role)) {
+    throw new HttpError(403, "This admin role cannot perform that action.");
+  }
+
+  return {
+    ...session,
+    token
+  };
+}
+
+function schedulePortalShutdown(context, shutdown) {
+  const delayMs = Math.max(0, shutdown.startAt - Date.now());
+  const timer = setTimeout(() => {
+    context.portalTimers.delete(timer);
+    void applyShutdownWindow(context, shutdown);
+  }, delayMs);
+
+  context.portalTimers.add(timer);
+}
+
+async function applyShutdownWindow(context, shutdown) {
+  broadcastAllRooms(context, "portal", {
+    type: "shutdown",
+    shutdown
+  });
+
+  if (shutdown.mode !== "forceEnd") {
+    return;
+  }
+
+  for (const room of context.rooms.values()) {
+    if (room.status === "cancelled" || room.status === "completed") {
+      continue;
+    }
+
+    if (context.timers.has(room.id)) {
+      clearTimeout(context.timers.get(room.id));
+      context.timers.delete(room.id);
+    }
+
+    const cancelledRoom = cancelRoom(room, {
+      now: Date.now(),
+      reason: "adminShutdown"
+    });
+
+    context.rooms.set(room.id, cancelledRoom);
+    broadcastRoom(context, cancelledRoom);
+  }
+}
+
+function serializeAdminRoom(room) {
+  const activePlayerIds = room.match?.playerOrder ?? [];
+  const connectedSeats = connectedHumanSeats(room);
+
+  return {
+    id: room.id,
+    status: room.status,
+    hostPlayerId: room.hostPlayerId,
+    hostName: room.seats.find((seat) => seat.playerId === room.hostPlayerId)?.name ?? room.hostPlayerId,
+    matchLength: room.matchLength,
+    players: room.seats.length,
+    connectedPlayers: connectedSeats.length,
+    connectedPlayerNames: connectedSeats.map((seat) => seat.name),
+    activePlayers: activePlayerIds.length,
+    lobbyPlayers: Math.max(0, room.seats.length - activePlayerIds.length),
+    currentGameNumber: room.match?.currentGameNumber ?? null,
+    flags: 0,
+    createdAt: room.createdAt,
+    startedAt: room.startedAt ?? null
+  };
+}
+
+function isLiveAdminRoom(room) {
+  return ["waiting", "active"].includes(room.status);
+}
+
+function connectedHumanSeats(room) {
+  return room.seats.filter((seat) => seat.connected && !seat.isBot);
 }
 
 function serializeRoom(room, viewerPlayerId = null) {
@@ -1096,6 +1593,7 @@ function serializeMatch(match, viewerPlayerId) {
       endReason: game.endReason,
       winnerId: game.winnerId,
       lockingPlayerId: game.lockingPlayerId,
+      placements: game.scoreResult.placements,
       pointsByPlayerId: game.scoreResult.pointsByPlayerId
     })),
     game: match.game ? serializeGame(match.game, viewerPlayerId) : null,
@@ -1251,7 +1749,6 @@ function serializeHand(hand) {
 
 function canEditSettingsForRoom(room) {
   return room.status === "waiting"
-    && room.seats.length >= 4
     && room.match === null;
 }
 
@@ -1259,6 +1756,11 @@ function canonicalPlayerName(name) {
   return String(name ?? "")
     .trim()
     .toLowerCase();
+}
+
+function capitalize(value) {
+  const text = String(value ?? "");
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function requestStartNow(match, playerId, options = {}) {

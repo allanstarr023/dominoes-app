@@ -48,7 +48,7 @@ test("starts the first game with the player holding double-six", () => {
   assert.equal(match.currentGameNumber, 1);
   assert.equal(match.game.currentPlayerId, "p1");
   assert.equal(match.game.requiredOpeningTileId, "6:6");
-  assert.equal(match.game.turnDeadlineAt, 46_000);
+  assert.equal(match.game.turnDeadlineAt, 31_000);
 });
 
 test("requires double-six as the first move of the first game", () => {
@@ -341,17 +341,46 @@ test("pause and resume preserves remaining turn time after a disconnect", () => 
   const paused = setPlayerConnection(match, "p2", false, { now: 11_000 });
 
   assert.equal(paused.status, MATCH_STATUS.PAUSED);
-  assert.equal(paused.pausedTimerRemainingMs, 35_000);
-  assert.equal(turnRemainingMs(paused, 12_000), 34_000);
+  assert.equal(paused.pausedTimerRemainingMs, 20_000);
+  assert.equal(turnRemainingMs(paused, 12_000), 19_000);
 
   const resumed = setPlayerConnection(paused, "p2", true, { now: 60_000 });
 
   assert.equal(resumed.status, MATCH_STATUS.ACTIVE);
   assert.equal(resumed.game.turnStartedAt, 60_000);
-  assert.equal(resumed.game.turnDeadlineAt, 95_000);
+  assert.equal(resumed.game.turnDeadlineAt, 80_000);
 });
 
-test("bathroom break pauses ten-game matches once per player", () => {
+test("bathroom break pauses five- and ten-game matches once per player", () => {
+  const match = startMatch({
+    players,
+    matchLength: 5,
+    now: 1000,
+    hands: basicHands()
+  });
+
+  const paused = requestBathroomBreak(match, "p2", { now: 11_000 });
+
+  assert.equal(paused.status, MATCH_STATUS.PAUSED);
+  assert.equal(paused.pauseReason, "bathroomBreak");
+  assert.equal(paused.pausedByPlayerId, "p2");
+  assert.equal(paused.pauseEndsAt, 11_000 + BATHROOM_BREAK_DURATION_MS);
+  assert.equal(paused.pausedTimerRemainingMs, 20_000);
+  assert.equal(paused.bathroomBreaksByPlayerId.p2, true);
+  assert.equal(turnRemainingMs(paused, 12_000), 119_000);
+
+  const resumed = resumeBathroomBreak(paused, { now: 131_000 });
+
+  assert.equal(resumed.status, MATCH_STATUS.ACTIVE);
+  assert.equal(resumed.game.turnStartedAt, 131_000);
+  assert.equal(resumed.game.turnDeadlineAt, 151_000);
+  assert.throws(
+    () => requestBathroomBreak(resumed, "p2", { now: 132_000 }),
+    /already used/
+  );
+});
+
+test("bathroom break also works in ten-game matches", () => {
   const match = startMatch({
     players,
     matchLength: 10,
@@ -363,35 +392,6 @@ test("bathroom break pauses ten-game matches once per player", () => {
 
   assert.equal(paused.status, MATCH_STATUS.PAUSED);
   assert.equal(paused.pauseReason, "bathroomBreak");
-  assert.equal(paused.pausedByPlayerId, "p2");
-  assert.equal(paused.pauseEndsAt, 11_000 + BATHROOM_BREAK_DURATION_MS);
-  assert.equal(paused.pausedTimerRemainingMs, 35_000);
-  assert.equal(paused.bathroomBreaksByPlayerId.p2, true);
-  assert.equal(turnRemainingMs(paused, 12_000), 119_000);
-
-  const resumed = resumeBathroomBreak(paused, { now: 131_000 });
-
-  assert.equal(resumed.status, MATCH_STATUS.ACTIVE);
-  assert.equal(resumed.game.turnStartedAt, 131_000);
-  assert.equal(resumed.game.turnDeadlineAt, 166_000);
-  assert.throws(
-    () => requestBathroomBreak(resumed, "p2", { now: 132_000 }),
-    /already used/
-  );
-});
-
-test("bathroom break is unavailable in five-game matches", () => {
-  const match = startMatch({
-    players,
-    matchLength: 5,
-    now: 1000,
-    hands: basicHands()
-  });
-
-  assert.throws(
-    () => requestBathroomBreak(match, "p2", { now: 11_000 }),
-    /only available in 10-game matches/
-  );
 });
 
 test("bathroom break ending keeps the match paused when a player has exited", () => {
@@ -409,7 +409,7 @@ test("bathroom break ending keeps the match paused when a player has exited", ()
   assert.equal(stillPaused.status, MATCH_STATUS.PAUSED);
   assert.equal(stillPaused.pauseReason, "disconnect");
   assert.deepEqual(stillPaused.disconnectedPlayerIds, ["p3"]);
-  assert.equal(stillPaused.pausedTimerRemainingMs, 35_000);
+  assert.equal(stillPaused.pausedTimerRemainingMs, 20_000);
 });
 
 test("stores trimmed in-game chat messages", () => {

@@ -322,13 +322,21 @@ test("admin can update future match settings", async () => {
     assert.equal(defaults.status, 200);
     assert.equal(defaultsBody.settings.scoring.first, 5);
 
-    const beforeFullTable = await postJson(`${baseUrl}/api/admin/login`, {
+    const beforeFullTableWrongPassword = await postJson(`${baseUrl}/api/admin/login`, {
       roomId: "room-settings",
       playerId: "p1",
       password: "wrong"
     });
 
-    assert.equal(beforeFullTable.status, 403);
+    assert.equal(beforeFullTableWrongPassword.status, 401);
+
+    const beforeFullTableLogin = await postJson(`${baseUrl}/api/admin/login`, {
+      roomId: "room-settings",
+      playerId: "p1",
+      password: "test-admin"
+    });
+
+    assert.equal(beforeFullTableLogin.status, 200);
 
     await postJson(`${baseUrl}/api/rooms/room-settings/join`, {
       playerId: "p2",
@@ -528,6 +536,303 @@ test("host can delete chat and block players while offensive chat is rejected", 
       text: "can I talk"
     });
     assert.equal(mutedChat.status, 403);
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
+test("portal admin reviews flags, mutes offenders, and removes lobby players", async () => {
+  const { server, baseUrl } = await listenToTestServer();
+
+  try {
+    await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-portal-mod",
+      hostId: "p1",
+      hostName: "Host",
+      matchLength: 5
+    });
+
+    for (const playerId of ["p2", "p3", "p4", "p5"]) {
+      await postJson(`${baseUrl}/api/rooms/room-portal-mod/join`, {
+        playerId,
+        name: `Player ${playerId.slice(1)}`
+      });
+    }
+
+    await postJson(`${baseUrl}/api/rooms/room-portal-mod/start`, {
+      playerId: "p1"
+    });
+
+    const blocked = await postJson(`${baseUrl}/api/rooms/room-portal-mod/chat`, {
+      playerId: "p2",
+      text: "badword"
+    });
+    assert.equal(blocked.status, 400);
+
+    const clean = await postJson(`${baseUrl}/api/rooms/room-portal-mod/chat`, {
+      playerId: "p3",
+      text: "that was not cool"
+    });
+    assert.equal(clean.status, 200);
+
+    const peerReport = await postJson(`${baseUrl}/api/rooms/room-portal-mod/report-player`, {
+      playerId: "p4",
+      targetPlayerId: "p3",
+      messageId: "chat-1",
+      reason: "Peer reported chat message"
+    });
+    assert.equal(peerReport.status, 200);
+
+    const login = await postJson(`${baseUrl}/api/admin/login`, {
+      password: "test-admin"
+    });
+    assert.equal(login.status, 200);
+
+    const portal = await getJson(`${baseUrl}/api/admin/portal`, login.body.token);
+    assert.equal(portal.status, 200);
+    assert.equal(portal.body.reports.length, 2);
+    assert.equal(portal.body.capacity.maxConcurrentChampionships, 30);
+
+    const systemReport = portal.body.reports.find((report) => report.source === "system");
+    const muted = await postJson(`${baseUrl}/api/admin/player-action`, {
+      roomId: "room-portal-mod",
+      targetPlayerId: "p2",
+      reportId: systemReport.id,
+      action: "mute",
+      minutes: 10
+    }, login.body.token);
+    assert.equal(muted.status, 200);
+    assert.ok(muted.body.room.match.chatMutedUntilByPlayerId.p2 > Date.now());
+
+    const removed = await postJson(`${baseUrl}/api/admin/player-action`, {
+      roomId: "room-portal-mod",
+      targetPlayerId: "p5",
+      action: "remove"
+    }, login.body.token);
+    assert.equal(removed.status, 200);
+    assert.equal(removed.body.room.status, "active");
+    assert.equal(removed.body.room.seats.some((seat) => seat.playerId === "p5"), false);
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
+test("portal shutdown force-ends active championships and blocks new ones", async () => {
+  const { server, baseUrl } = await listenToTestServer();
+
+  try {
+    await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-shutdown",
+      hostId: "p1",
+      hostName: "Host",
+      matchLength: 5
+    });
+
+    for (const playerId of ["p2", "p3", "p4"]) {
+      await postJson(`${baseUrl}/api/rooms/room-shutdown/join`, {
+        playerId,
+        name: `Player ${playerId.slice(1)}`
+      });
+    }
+
+    await postJson(`${baseUrl}/api/rooms/room-shutdown/start`, {
+      playerId: "p1"
+    });
+
+    const login = await postJson(`${baseUrl}/api/admin/login`, {
+      password: "test-admin"
+    });
+    const now = Date.now();
+    const shutdown = await postJson(`${baseUrl}/api/admin/shutdowns`, {
+      mode: "forceEnd",
+      startAt: now - 1_000,
+      endAt: now + 60_000,
+      message: "Saturday maintenance"
+    }, login.body.token);
+    assert.equal(shutdown.status, 200);
+
+    const room = await fetch(`${baseUrl}/api/rooms/room-shutdown?playerId=p1`);
+    const roomBody = await room.json();
+    assert.equal(roomBody.room.status, "cancelled");
+    assert.equal(roomBody.room.match.cancelReason, "adminShutdown");
+
+    const rejected = await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-blocked",
+      hostId: "host-blocked",
+      hostName: "Host",
+      matchLength: 5
+    });
+    assert.equal(rejected.status, 403);
+
+    const portalStatus = await fetch(`${baseUrl}/api/portal-status`);
+    const portalBody = await portalStatus.json();
+    assert.equal(portalBody.activeShutdown.message, "Saturday maintenance");
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
+test("portal capacity setting limits concurrent championships", async () => {
+  const { server, baseUrl } = await listenToTestServer();
+
+  try {
+    const login = await postJson(`${baseUrl}/api/admin/login`, {
+      password: "test-admin"
+    });
+    assert.equal(login.status, 200);
+
+    const updated = await putJson(`${baseUrl}/api/admin/portal-settings`, {
+      portalSettings: {
+        maxConcurrentChampionships: 1,
+        allowNewChampionships: true
+      }
+    }, login.body.token);
+    assert.equal(updated.status, 200);
+    assert.equal(updated.body.portalSettings.maxConcurrentChampionships, 1);
+
+    const first = await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-capacity-one",
+      hostId: "p1",
+      hostName: "Host",
+      matchLength: 2
+    });
+    assert.equal(first.status, 201);
+
+    const second = await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-capacity-two",
+      hostId: "p2",
+      hostName: "Host 2",
+      matchLength: 2
+    });
+    assert.equal(second.status, 403);
+    assert.match(second.body.error, /capacity/);
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
+test("portal dashboard only counts live rooms and connected human players", async () => {
+  const { server, baseUrl } = await listenToTestServer();
+
+  try {
+    const login = await postJson(`${baseUrl}/api/admin/login`, {
+      password: "test-admin"
+    });
+    assert.equal(login.status, 200);
+
+    await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-live-metrics",
+      hostId: "p1",
+      hostName: "Host",
+      matchLength: 5
+    });
+    for (const playerId of ["p2", "p3", "p4"]) {
+      await postJson(`${baseUrl}/api/rooms/room-live-metrics/join`, {
+        playerId,
+        name: `Player ${playerId.slice(1)}`
+      });
+    }
+    await postJson(`${baseUrl}/api/rooms/room-live-metrics/add-bot`, {
+      playerId: "p1"
+    });
+    await postJson(`${baseUrl}/api/rooms/room-live-metrics/start`, {
+      playerId: "p1"
+    });
+    await postJson(`${baseUrl}/api/rooms/room-live-metrics/disconnect`, {
+      playerId: "p3"
+    });
+
+    await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-cancelled-metrics",
+      hostId: "c1",
+      hostName: "Cancelled Host",
+      matchLength: 5
+    });
+    await postJson(`${baseUrl}/api/admin/player-action`, {
+      roomId: "room-cancelled-metrics",
+      targetPlayerId: "c1",
+      action: "remove"
+    }, login.body.token);
+
+    const portal = await getJson(`${baseUrl}/api/admin/portal`, login.body.token);
+    assert.equal(portal.status, 200);
+    assert.equal(portal.body.rooms.some((room) => room.id === "room-cancelled-metrics"), false);
+    assert.equal(portal.body.metrics.connectedPlayers, 3);
+    assert.equal(portal.body.metrics.bots, 1);
+    assert.deepEqual(
+      portal.body.rooms.find((room) => room.id === "room-live-metrics").connectedPlayerNames.sort(),
+      ["Host", "Player 2", "Player 4"].sort()
+    );
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
+test("portal broadcasts expire after 60 seconds by default", async () => {
+  const { server, baseUrl } = await listenToTestServer();
+
+  try {
+    const login = await postJson(`${baseUrl}/api/admin/login`, {
+      password: "test-admin"
+    });
+    assert.equal(login.status, 200);
+
+    const broadcast = await postJson(`${baseUrl}/api/admin/broadcasts`, {
+      audience: "all",
+      message: "Short portal notice"
+    }, login.body.token);
+
+    assert.equal(broadcast.status, 200);
+    assert.equal(broadcast.body.broadcast.expiresAt - broadcast.body.broadcast.createdAt, 60_000);
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
+test("owner can create admins and inactive admins cannot log in", async () => {
+  const { server, baseUrl } = await listenToTestServer();
+
+  try {
+    const owner = await postJson(`${baseUrl}/api/admin/login`, {
+      password: "test-admin"
+    });
+    assert.equal(owner.status, 200);
+    assert.equal(owner.body.adminUser.role, "owner");
+
+    const created = await postJson(`${baseUrl}/api/admin/users`, {
+      firstName: "Maya",
+      lastName: "Mod",
+      email: "maya@example.com",
+      password: "strong-pass-1",
+      role: "moderator",
+      status: "active",
+      profilePictureDataUrl: "data:image/png;base64,AA=="
+    }, owner.body.token);
+    assert.equal(created.status, 201);
+    assert.equal(created.body.adminUser.email, "maya@example.com");
+    assert.equal(created.body.adminUser.role, "moderator");
+    assert.equal(created.body.adminUser.status, "active");
+    assert.equal("passwordHash" in created.body.adminUser, false);
+
+    const moderator = await postJson(`${baseUrl}/api/admin/login`, {
+      email: "maya@example.com",
+      password: "strong-pass-1"
+    });
+    assert.equal(moderator.status, 200);
+    assert.equal(moderator.body.adminUser.role, "moderator");
+
+    const inactive = await putJson(`${baseUrl}/api/admin/users/status`, {
+      adminUserId: created.body.adminUser.id,
+      status: "inactive"
+    }, owner.body.token);
+    assert.equal(inactive.status, 200);
+    assert.equal(inactive.body.adminUser.status, "inactive");
+
+    const rejected = await postJson(`${baseUrl}/api/admin/login`, {
+      email: "maya@example.com",
+      password: "strong-pass-1"
+    });
+    assert.equal(rejected.status, 401);
   } finally {
     await closeTestServer(server);
   }
@@ -805,11 +1110,23 @@ async function closeTestServer(server) {
   });
 }
 
-async function postJson(url, body) {
+async function getJson(url, token = null) {
+  const response = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
+  });
+
+  return {
+    status: response.status,
+    body: await response.json()
+  };
+}
+
+async function postJson(url, body, token = null) {
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
     },
     body: JSON.stringify(body)
   });

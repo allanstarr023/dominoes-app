@@ -1,11 +1,23 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import { DEFAULT_MATCH_SETTINGS } from "./matchEngine.js";
 
 const DEFAULT_DATA = Object.freeze({
   settings: DEFAULT_MATCH_SETTINGS,
-  matches: []
+  matches: [],
+  admin: {
+    reports: [],
+    actions: [],
+    shutdownWindows: [],
+    broadcasts: [],
+    adminUsers: [],
+    portalSettings: {
+      maxConcurrentChampionships: 30,
+      allowNewChampionships: true
+    }
+  }
 });
 
 export function createStatsStore(options = {}) {
@@ -40,6 +52,34 @@ export function createStatsStore(options = {}) {
   return {
     verifyAdminPassword(password) {
       return String(password ?? "") === adminPassword;
+    },
+
+    async authenticatePortalAdmin(input = {}) {
+      const data = await load();
+      const email = canonicalEmail(input.email);
+
+      if (email) {
+        const user = data.admin.adminUsers.find((item) => item.email === email);
+
+        if (!user || user.status !== "active" || !verifyAdminUserPassword(user, input.password)) {
+          return null;
+        }
+
+        return publicAdminUser(user);
+      }
+
+      if (String(input.password ?? "") !== adminPassword) {
+        return null;
+      }
+
+      const primaryUser = data.admin.adminUsers.find((user) => user.id === "admin-primary")
+        ?? defaultPrimaryAdminUser();
+
+      if (primaryUser.status !== "active") {
+        return null;
+      }
+
+      return publicAdminUser(primaryUser);
     },
 
     async getSettings() {
@@ -91,6 +131,277 @@ export function createStatsStore(options = {}) {
         records: buildRecords(data.matches),
         settings: data.settings
       };
+    },
+
+    async getPortalSettings() {
+      const data = await load();
+      return data.admin.portalSettings;
+    },
+
+    async updatePortalSettings(input = {}, options = {}) {
+      const data = await load();
+      const portalSettings = normalizePortalSettings(input);
+      const nextData = {
+        ...data,
+        admin: {
+          ...data.admin,
+          portalSettings
+        }
+      };
+
+      await save(nextData);
+      await appendAdminAction(nextData, {
+        type: "portalSettingsUpdated",
+        adminTokenId: options.adminTokenId,
+        summary: `Capacity set to ${portalSettings.maxConcurrentChampionships}, new championships ${portalSettings.allowNewChampionships ? "enabled" : "disabled"}`,
+        at: options.now ?? Date.now()
+      }, save);
+
+      return portalSettings;
+    },
+
+    async createAdminUser(input = {}, options = {}) {
+      const data = await load();
+      const now = options.now ?? Date.now();
+      const email = canonicalEmail(input.email);
+
+      if (!email) {
+        throw new Error("Admin email is required.");
+      }
+
+      if (data.admin.adminUsers.some((user) => user.email === email)) {
+        throw new Error("An admin with this email already exists.");
+      }
+
+      if (String(input.password ?? "").length < 8) {
+        throw new Error("Admin password must be at least 8 characters.");
+      }
+
+      const password = hashAdminPassword(input.password);
+      const user = normalizeAdminUser({
+        ...input,
+        ...password,
+        email,
+        id: input.id ?? createRecordId("admin-user", now, data.admin.adminUsers.length),
+        createdAt: now,
+        updatedAt: now
+      });
+      const nextData = {
+        ...data,
+        admin: {
+          ...data.admin,
+          adminUsers: [
+            user,
+            ...data.admin.adminUsers
+          ].slice(0, 100)
+        }
+      };
+
+      await save(nextData);
+      await appendAdminAction(nextData, {
+        type: "adminUserCreated",
+        adminTokenId: options.adminTokenId,
+        targetName: adminDisplayName(user),
+        summary: `Created ${user.role} admin ${adminDisplayName(user)}`,
+        at: now
+      }, save);
+
+      return publicAdminUser(user);
+    },
+
+    async updateAdminUserStatus(adminUserId, status, options = {}) {
+      const data = await load();
+      const now = options.now ?? Date.now();
+      const normalizedStatus = normalizeAdminStatus(status);
+      let target = null;
+      const adminUsers = data.admin.adminUsers.map((user) => {
+        if (user.id !== adminUserId) {
+          return user;
+        }
+
+        target = normalizeAdminUser({
+          ...user,
+          status: normalizedStatus,
+          updatedAt: now
+        });
+        return target;
+      });
+
+      if (!target) {
+        throw new Error("Admin user not found.");
+      }
+
+      const nextData = {
+        ...data,
+        admin: {
+          ...data.admin,
+          adminUsers
+        }
+      };
+
+      await save(nextData);
+      await appendAdminAction(nextData, {
+        type: "adminUserStatusUpdated",
+        adminTokenId: options.adminTokenId,
+        targetName: adminDisplayName(target),
+        summary: `${adminDisplayName(target)} set to ${target.status}`,
+        at: now
+      }, save);
+
+      return publicAdminUser(target);
+    },
+
+    async createModerationReport(input = {}) {
+      const data = await load();
+      const now = input.now ?? Date.now();
+      const report = normalizeReport({
+        ...input,
+        id: input.id ?? createRecordId("report", now, data.admin.reports.length),
+        createdAt: now,
+        status: "open"
+      });
+
+      await save({
+        ...data,
+        admin: {
+          ...data.admin,
+          reports: [
+            report,
+            ...data.admin.reports
+          ].slice(0, 500)
+        }
+      });
+
+      return report;
+    },
+
+    async resolveModerationReport(reportId, input = {}) {
+      const data = await load();
+      const now = input.now ?? Date.now();
+      let target = null;
+      const reports = data.admin.reports.map((report) => {
+        if (report.id !== reportId) {
+          return report;
+        }
+
+        target = {
+          ...report,
+          status: input.status ?? "reviewed",
+          reviewedAt: now,
+          resolution: input.resolution ?? null
+        };
+        return target;
+      });
+
+      if (!target) {
+        throw new Error("Report not found.");
+      }
+
+      const nextData = {
+        ...data,
+        admin: {
+          ...data.admin,
+          reports
+        }
+      };
+
+      await save(nextData);
+      await appendAdminAction(nextData, {
+        type: "reportResolved",
+        adminTokenId: input.adminTokenId,
+        roomId: target.roomId,
+        targetPlayerId: target.targetPlayerId,
+        summary: `Report ${target.id} marked ${target.status}`,
+        at: now
+      }, save);
+
+      return target;
+    },
+
+    async recordAdminAction(input = {}) {
+      const data = await load();
+      return appendAdminAction(data, input, save);
+    },
+
+    async createShutdownWindow(input = {}) {
+      const data = await load();
+      const now = input.now ?? Date.now();
+      const shutdown = normalizeShutdown({
+        ...input,
+        id: input.id ?? createRecordId("shutdown", now, data.admin.shutdownWindows.length),
+        createdAt: now
+      });
+      const nextData = {
+        ...data,
+        admin: {
+          ...data.admin,
+          shutdownWindows: [
+            shutdown,
+            ...data.admin.shutdownWindows
+          ].slice(0, 100)
+        }
+      };
+
+      await save(nextData);
+      await appendAdminAction(nextData, {
+        type: "shutdownScheduled",
+        adminTokenId: input.adminTokenId,
+        summary: `${shutdown.mode} shutdown scheduled`,
+        at: now
+      }, save);
+
+      return shutdown;
+    },
+
+    async getActiveShutdown(now = Date.now()) {
+      const data = await load();
+      return activeShutdown(data.admin.shutdownWindows, now);
+    },
+
+    async createBroadcast(input = {}) {
+      const data = await load();
+      const now = input.now ?? Date.now();
+      const broadcast = normalizeBroadcast({
+        ...input,
+        id: input.id ?? createRecordId("broadcast", now, data.admin.broadcasts.length),
+        createdAt: now
+      });
+      const nextData = {
+        ...data,
+        admin: {
+          ...data.admin,
+          broadcasts: [
+            broadcast,
+            ...data.admin.broadcasts
+          ].slice(0, 100)
+        }
+      };
+
+      await save(nextData);
+      await appendAdminAction(nextData, {
+        type: "broadcastSent",
+        adminTokenId: input.adminTokenId,
+        summary: broadcast.message,
+        at: now
+      }, save);
+
+      return broadcast;
+    },
+
+    async getPortalSnapshot(now = Date.now()) {
+      const data = await load();
+      const openReports = data.admin.reports.filter((report) => report.status === "open");
+
+      return {
+        portalSettings: data.admin.portalSettings,
+        activeShutdown: activeShutdown(data.admin.shutdownWindows, now),
+        reports: openReports,
+        recentReports: data.admin.reports.slice(0, 50),
+        shutdownWindows: data.admin.shutdownWindows.slice(0, 20),
+        broadcasts: data.admin.broadcasts.slice(0, 20),
+        adminUsers: data.admin.adminUsers.map(publicAdminUser),
+        auditLog: data.admin.actions.slice(0, 80)
+      };
     }
   };
 }
@@ -107,7 +418,7 @@ export function normalizeSettings(input = {}) {
       lockWin: intSetting(scoring.lockWin, DEFAULT_MATCH_SETTINGS.scoring.lockWin, 0, 100),
       lockLose: intSetting(scoring.lockLose, DEFAULT_MATCH_SETTINGS.scoring.lockLose, -100, 100)
     },
-    turnDurationMs: intSetting(input.turnDurationMs, DEFAULT_MATCH_SETTINGS.turnDurationMs, 5_000, 300_000),
+    turnDurationMs: turnDurationSetting(input.turnDurationMs, DEFAULT_MATCH_SETTINGS.turnDurationMs),
     betweenGamesDurationMs: intSetting(input.betweenGamesDurationMs, DEFAULT_MATCH_SETTINGS.betweenGamesDurationMs, 0, 300_000),
     finalReviewDurationMs: intSetting(input.finalReviewDurationMs, DEFAULT_MATCH_SETTINGS.finalReviewDurationMs, 0, 300_000),
     bathroomBreakDurationMs: intSetting(input.bathroomBreakDurationMs, DEFAULT_MATCH_SETTINGS.bathroomBreakDurationMs, 0, 600_000),
@@ -120,7 +431,19 @@ export function normalizeSettings(input = {}) {
 function normalizeData(data) {
   return {
     settings: normalizeSettings(data.settings ?? DEFAULT_MATCH_SETTINGS),
-    matches: Array.isArray(data.matches) ? data.matches : []
+    matches: Array.isArray(data.matches) ? data.matches : [],
+    admin: normalizeAdminData(data.admin)
+  };
+}
+
+function normalizeAdminData(admin = {}) {
+  return {
+    reports: Array.isArray(admin.reports) ? admin.reports.map(normalizeReport) : [],
+    actions: Array.isArray(admin.actions) ? admin.actions.map(normalizeAdminAction) : [],
+    shutdownWindows: Array.isArray(admin.shutdownWindows) ? admin.shutdownWindows.map(normalizeShutdown) : [],
+    broadcasts: Array.isArray(admin.broadcasts) ? admin.broadcasts.map(normalizeBroadcast) : [],
+    adminUsers: normalizeAdminUsers(admin.adminUsers),
+    portalSettings: normalizePortalSettings(admin.portalSettings)
   };
 }
 
@@ -273,6 +596,216 @@ function playerName(room, playerId) {
 
 function playerKey(name) {
   return String(name ?? "").trim().toLowerCase();
+}
+
+async function appendAdminAction(data, input = {}, save) {
+  const now = input.at ?? input.now ?? Date.now();
+  const action = normalizeAdminAction({
+    ...input,
+    id: input.id ?? createRecordId("action", now, data.admin.actions.length),
+    at: now
+  });
+
+  await save({
+    ...data,
+    admin: {
+      ...data.admin,
+      actions: [
+        action,
+        ...data.admin.actions
+      ].slice(0, 500)
+    }
+  });
+
+  return action;
+}
+
+function normalizePortalSettings(input = {}) {
+  return {
+    maxConcurrentChampionships: intSetting(input.maxConcurrentChampionships, DEFAULT_DATA.admin.portalSettings.maxConcurrentChampionships, 1, 500),
+    allowNewChampionships: input.allowNewChampionships !== false
+  };
+}
+
+function turnDurationSetting(value, fallback) {
+  const number = intSetting(value, fallback, 25_000, 45_000);
+
+  return [25_000, 30_000, 45_000].includes(number) ? number : fallback;
+}
+
+function normalizeReport(input = {}) {
+  return {
+    id: String(input.id ?? ""),
+    source: ["system", "peer"].includes(input.source) ? input.source : "peer",
+    status: ["open", "reviewed", "dismissed", "actioned"].includes(input.status) ? input.status : "open",
+    roomId: String(input.roomId ?? ""),
+    roomStatus: input.roomStatus ?? null,
+    reporterPlayerId: input.reporterPlayerId ? String(input.reporterPlayerId) : null,
+    reporterName: input.reporterName ? String(input.reporterName).slice(0, 80) : null,
+    targetPlayerId: String(input.targetPlayerId ?? input.playerId ?? ""),
+    targetName: String(input.targetName ?? input.playerName ?? input.targetPlayerId ?? "").slice(0, 80),
+    messageId: input.messageId ? String(input.messageId) : null,
+    messageText: String(input.messageText ?? input.text ?? "").slice(0, 500),
+    reason: String(input.reason ?? "Offensive language").slice(0, 160),
+    createdAt: Number(input.createdAt ?? Date.now()),
+    reviewedAt: input.reviewedAt ? Number(input.reviewedAt) : null,
+    resolution: input.resolution ? String(input.resolution).slice(0, 200) : null
+  };
+}
+
+function normalizeAdminAction(input = {}) {
+  return {
+    id: String(input.id ?? ""),
+    type: String(input.type ?? "adminAction").slice(0, 80),
+    adminTokenId: input.adminTokenId ? String(input.adminTokenId) : null,
+    roomId: input.roomId ? String(input.roomId) : null,
+    targetPlayerId: input.targetPlayerId ? String(input.targetPlayerId) : null,
+    targetName: input.targetName ? String(input.targetName).slice(0, 80) : null,
+    summary: String(input.summary ?? "").slice(0, 300),
+    at: Number(input.at ?? Date.now())
+  };
+}
+
+function normalizeShutdown(input = {}) {
+  const rawStartAt = Number(input.startAt);
+  const startAt = Number.isFinite(rawStartAt) ? rawStartAt : Date.now();
+  const rawEndAt = Number(input.endAt);
+  const endAt = Math.max(startAt + 60_000, Number.isFinite(rawEndAt) ? rawEndAt : startAt + 24 * 60 * 60_000);
+  const mode = ["blockNew", "letActiveFinish", "forceEnd"].includes(input.mode)
+    ? input.mode
+    : "letActiveFinish";
+
+  return {
+    id: String(input.id ?? ""),
+    mode,
+    message: String(input.message ?? "The portal is temporarily unavailable.").slice(0, 220),
+    startAt,
+    endAt,
+    createdAt: Number(input.createdAt ?? Date.now())
+  };
+}
+
+function normalizeBroadcast(input = {}) {
+  const audience = ["all", "activeRooms", "lobby"].includes(input.audience) ? input.audience : "all";
+  const createdAt = Number(input.createdAt ?? Date.now());
+
+  return {
+    id: String(input.id ?? ""),
+    audience,
+    message: String(input.message ?? "").trim().slice(0, 260),
+    createdAt,
+    expiresAt: input.expiresAt ? Number(input.expiresAt) : createdAt + 60_000
+  };
+}
+
+function normalizeAdminUsers(input = []) {
+  const users = Array.isArray(input) ? input.map(normalizeAdminUser) : [];
+
+  if (!users.some((user) => user.id === "admin-primary")) {
+    users.push(defaultPrimaryAdminUser());
+  }
+
+  return users;
+}
+
+function defaultPrimaryAdminUser() {
+  return normalizeAdminUser({
+    id: "admin-primary",
+    firstName: "Portal",
+    lastName: "Admin",
+    email: "admin@local",
+    role: "owner",
+    status: "active",
+    createdAt: 0,
+    updatedAt: 0
+  });
+}
+
+function normalizeAdminUser(input = {}) {
+  return {
+    id: String(input.id ?? ""),
+    firstName: String(input.firstName ?? "").trim().slice(0, 60),
+    lastName: String(input.lastName ?? "").trim().slice(0, 60),
+    email: canonicalEmail(input.email),
+    role: normalizeAdminRole(input.role),
+    status: normalizeAdminStatus(input.status),
+    profilePictureDataUrl: normalizeProfilePicture(input.profilePictureDataUrl),
+    passwordSalt: input.passwordSalt ? String(input.passwordSalt) : null,
+    passwordHash: input.passwordHash ? String(input.passwordHash) : null,
+    createdAt: Number(input.createdAt ?? Date.now()),
+    updatedAt: Number(input.updatedAt ?? input.createdAt ?? Date.now())
+  };
+}
+
+function publicAdminUser(user) {
+  return {
+    id: user.id,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    email: user.email,
+    role: user.role,
+    status: user.status,
+    profilePictureDataUrl: user.profilePictureDataUrl,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt
+  };
+}
+
+function adminDisplayName(user) {
+  return [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email || user.id;
+}
+
+function canonicalEmail(value) {
+  return String(value ?? "").trim().toLowerCase().slice(0, 160);
+}
+
+function normalizeAdminRole(role) {
+  return ["owner", "manager", "moderator", "viewer"].includes(role) ? role : "moderator";
+}
+
+function normalizeAdminStatus(status) {
+  return status === "inactive" ? "inactive" : "active";
+}
+
+function normalizeProfilePicture(value) {
+  const text = String(value ?? "");
+
+  if (!text.startsWith("data:image/")) {
+    return "";
+  }
+
+  return text.slice(0, 250_000);
+}
+
+function hashAdminPassword(password) {
+  const passwordSalt = randomBytes(16).toString("hex");
+  const passwordHash = createHash("sha256")
+    .update(`${passwordSalt}:${String(password ?? "")}`)
+    .digest("hex");
+
+  return { passwordSalt, passwordHash };
+}
+
+function verifyAdminUserPassword(user, password) {
+  if (!user.passwordSalt || !user.passwordHash) {
+    return false;
+  }
+
+  const candidate = createHash("sha256")
+    .update(`${user.passwordSalt}:${String(password ?? "")}`)
+    .digest("hex");
+  const expected = Buffer.from(user.passwordHash, "hex");
+  const actual = Buffer.from(candidate, "hex");
+
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function activeShutdown(windows, now) {
+  return windows.find((window) => window.startAt <= now && window.endAt > now) ?? null;
+}
+
+function createRecordId(prefix, now, count) {
+  return `${prefix}-${now.toString(36)}-${String(count + 1).padStart(3, "0")}`;
 }
 
 function intSetting(value, fallback, min, max) {

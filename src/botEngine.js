@@ -9,7 +9,7 @@ import {
   tileTotal
 } from "./dominoesEngine.js";
 
-export const BOT_TURN_DELAY_MS = 450;
+export const BOT_TURN_DELAY_MS = 1_500;
 
 export function isBotPlayer(player) {
   return Boolean(player?.isBot);

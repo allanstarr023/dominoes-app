@@ -22,7 +22,7 @@ export const MATCH_STATUS = Object.freeze({
   CANCELLED: "cancelled"
 });
 
-export const TURN_DURATION_MS = 45_000;
+export const TURN_DURATION_MS = 30_000;
 export const BETWEEN_GAMES_DURATION_MS = 60_000;
 export const FINAL_REVIEW_DURATION_MS = 20_000;
 export const BATHROOM_BREAK_DURATION_MS = 120_000;
@@ -145,6 +145,31 @@ export function addPlayerToMatch(match, player, options = {}) {
       ...(match.bathroomBreaksByPlayerId ?? {}),
       [normalized.id]: false
     }
+  };
+}
+
+export function removePlayerFromMatch(match, playerId) {
+  assertKnownPlayer(match, playerId);
+
+  if (match.playerOrder.includes(playerId)) {
+    throw new Error("Active table players cannot be removed without cancelling the championship.");
+  }
+
+  const { [playerId]: removedPlayer, ...playersById } = match.playersById;
+  const { [playerId]: removedRawScore, ...rawScores } = match.rawScores;
+  const { [playerId]: removedInfraction, ...infractions } = match.infractions;
+  const { [playerId]: removedMute, ...chatMutedUntilByPlayerId } = match.chatMutedUntilByPlayerId ?? {};
+  const { [playerId]: removedBreak, ...bathroomBreaksByPlayerId } = match.bathroomBreaksByPlayerId ?? {};
+
+  return {
+    ...match,
+    rosterOrder: (match.rosterOrder ?? match.playerOrder).filter((id) => id !== playerId),
+    benchPlayerIds: (match.benchPlayerIds ?? []).filter((id) => id !== playerId),
+    playersById,
+    rawScores,
+    infractions,
+    chatMutedUntilByPlayerId,
+    bathroomBreaksByPlayerId
   };
 }
 
@@ -348,8 +373,8 @@ export function requestBathroomBreak(match, playerId, options = {}) {
     throw new Error("Only active players can request a bathroom break.");
   }
 
-  if (match.matchLength !== 10) {
-    throw new Error("Bathroom breaks are only available in 10-game matches.");
+  if (![5, 10].includes(match.matchLength)) {
+    throw new Error("Bathroom breaks are only available in 5- and 10-game matches.");
   }
 
   if (match.bathroomBreaksByPlayerId[playerId]) {
@@ -1014,7 +1039,7 @@ function normalizeMatchSettings(settings = {}) {
       lockWin: numberSetting(scoring.lockWin, DEFAULT_MATCH_SETTINGS.scoring.lockWin),
       lockLose: numberSetting(scoring.lockLose, DEFAULT_MATCH_SETTINGS.scoring.lockLose)
     },
-    turnDurationMs: numberSetting(settings.turnDurationMs, DEFAULT_MATCH_SETTINGS.turnDurationMs),
+    turnDurationMs: turnDurationSetting(settings.turnDurationMs, DEFAULT_MATCH_SETTINGS.turnDurationMs),
     betweenGamesDurationMs: numberSetting(settings.betweenGamesDurationMs, DEFAULT_MATCH_SETTINGS.betweenGamesDurationMs),
     finalReviewDurationMs: numberSetting(settings.finalReviewDurationMs, DEFAULT_MATCH_SETTINGS.finalReviewDurationMs),
     bathroomBreakDurationMs: numberSetting(settings.bathroomBreakDurationMs, DEFAULT_MATCH_SETTINGS.bathroomBreakDurationMs),
@@ -1028,6 +1053,12 @@ function numberSetting(value, fallback) {
   const number = Number(value ?? fallback);
 
   return Number.isFinite(number) ? number : fallback;
+}
+
+function turnDurationSetting(value, fallback) {
+  const number = numberSetting(value, fallback);
+
+  return [25_000, 30_000, 45_000].includes(number) ? number : fallback;
 }
 
 function assertActiveTurn(match, playerId) {

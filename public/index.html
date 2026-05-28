@@ -7,8 +7,8 @@
     <meta name="theme-color" content="#174d3f">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Dominoes">
-    <link rel="manifest" href="/manifest.webmanifest?v=40">
-    <link rel="stylesheet" href="/styles.css?v=40">
+    <link rel="manifest" href="/manifest.webmanifest?v=44">
+    <link rel="stylesheet" href="/styles.css?v=44">
   </head>
   <body>
     <div class="app-shell">
@@ -25,6 +25,7 @@
           <div class="session-pill" id="sessionPill">Not seated</div>
         </div>
       </header>
+      <div class="portal-notice hidden" id="portalNotice"></div>
 
       <main class="layout">
         <section class="setup-panel" id="setupPanel">
@@ -80,6 +81,164 @@
           </form>
         </section>
 
+        <section class="admin-portal hidden" id="adminPortal">
+          <div class="admin-shell">
+            <form class="panel admin-login-card" id="portalAdminLoginForm">
+              <h1>Portal Admin</h1>
+              <label>
+                Email
+                <input id="portalAdminEmailInput" type="email" autocomplete="username" placeholder="Optional for primary admin">
+              </label>
+              <label>
+                Admin Password
+                <input id="portalAdminPasswordInput" type="password" autocomplete="current-password" required>
+              </label>
+              <button type="submit">Login</button>
+            </form>
+
+            <div class="admin-dashboard hidden" id="adminDashboard">
+              <div class="admin-head">
+                <div>
+                  <h1>Portal Admin</h1>
+                  <p>Moderation, capacity, shutdowns, and live championship controls.</p>
+                </div>
+                <button class="small-button" id="adminRefreshButton" type="button">Refresh</button>
+              </div>
+
+              <div class="admin-metrics" id="adminMetrics"></div>
+
+              <details class="panel admin-section" open>
+                <summary class="dock-summary">
+                  <span>Moderation Queue</span>
+                  <span class="dock-summary-meta">Reports</span>
+                </summary>
+                <div class="admin-list" id="adminReportsList"></div>
+              </details>
+
+              <details class="panel admin-section" open>
+                <summary class="dock-summary">
+                  <span>Championships</span>
+                  <span class="dock-summary-meta">Live rooms</span>
+                </summary>
+                <div class="admin-list" id="adminRoomsList"></div>
+              </details>
+
+              <details class="panel admin-section">
+                <summary class="dock-summary">
+                  <span>Shutdown Schedule</span>
+                  <span class="dock-summary-meta">Maintenance</span>
+                </summary>
+                <form class="admin-form" id="adminShutdownForm">
+                  <label>Mode
+                    <select id="adminShutdownMode">
+                      <option value="letActiveFinish">Block new, let active finish</option>
+                      <option value="blockNew">Block new championships only</option>
+                      <option value="forceEnd">Force end all championships</option>
+                    </select>
+                  </label>
+                  <label>Start
+                    <input id="adminShutdownStart" type="datetime-local" required>
+                  </label>
+                  <label>End
+                    <input id="adminShutdownEnd" type="datetime-local" required>
+                  </label>
+                  <label>Message
+                    <input id="adminShutdownMessage" maxlength="220" value="Portal maintenance is scheduled.">
+                  </label>
+                  <button type="submit">Schedule Shutdown</button>
+                </form>
+                <div class="admin-list" id="adminShutdownList"></div>
+              </details>
+
+              <details class="panel admin-section">
+                <summary class="dock-summary">
+                  <span>Broadcast</span>
+                  <span class="dock-summary-meta">Portal notice</span>
+                </summary>
+                <form class="admin-form" id="adminBroadcastForm">
+                  <label>Audience
+                    <select id="adminBroadcastAudience">
+                      <option value="all">All users</option>
+                      <option value="activeRooms">Active rooms</option>
+                      <option value="lobby">Lobby viewers</option>
+                    </select>
+                  </label>
+                  <label>Message
+                    <input id="adminBroadcastMessage" maxlength="260" required>
+                  </label>
+                  <button type="submit">Send Broadcast</button>
+                </form>
+                <div class="admin-list" id="adminBroadcastList"></div>
+              </details>
+
+              <details class="panel admin-section">
+                <summary class="dock-summary">
+                  <span>Capacity Settings</span>
+                  <span class="dock-summary-meta">Controls</span>
+                </summary>
+                <form class="admin-form" id="adminCapacityForm">
+                  <label>Max concurrent championships
+                    <input id="adminCapacityInput" type="number" min="1" max="500" required>
+                  </label>
+                  <label class="checkbox-row">
+                    <input id="adminAllowNewInput" type="checkbox">
+                    Allow new championships
+                  </label>
+                  <button type="submit">Save Capacity</button>
+                </form>
+              </details>
+
+              <details class="panel admin-section">
+                <summary class="dock-summary">
+                  <span>Admin Users</span>
+                  <span class="dock-summary-meta">Roles</span>
+                </summary>
+                <form class="admin-form admin-user-form" id="adminUserForm">
+                  <label>First name
+                    <input id="adminUserFirstName" maxlength="60" required>
+                  </label>
+                  <label>Last name
+                    <input id="adminUserLastName" maxlength="60" required>
+                  </label>
+                  <label>Email
+                    <input id="adminUserEmail" type="email" autocomplete="off" maxlength="160" required>
+                  </label>
+                  <label>Password
+                    <input id="adminUserPassword" type="password" autocomplete="new-password" minlength="8" required>
+                  </label>
+                  <label>Role
+                    <select id="adminUserRole">
+                      <option value="moderator">Moderator</option>
+                      <option value="manager">Manager</option>
+                      <option value="viewer">Viewer</option>
+                      <option value="owner">Owner</option>
+                    </select>
+                  </label>
+                  <label>Status
+                    <select id="adminUserStatus">
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                    </select>
+                  </label>
+                  <label class="admin-profile-upload">Profile picture
+                    <input id="adminUserProfilePicture" type="file" accept="image/*">
+                  </label>
+                  <button type="submit">Create Admin</button>
+                </form>
+                <div class="admin-list" id="adminUsersList"></div>
+              </details>
+
+              <details class="panel admin-section">
+                <summary class="dock-summary">
+                  <span>Audit Log</span>
+                  <span class="dock-summary-meta">Actions</span>
+                </summary>
+                <div class="admin-list" id="adminAuditList"></div>
+              </details>
+            </div>
+          </div>
+        </section>
+
         <section class="table-view hidden" id="tableView">
           <aside class="sidebar">
             <details class="panel dock-section players-dock" id="playersDock" open>
@@ -89,8 +248,11 @@
               </summary>
               <div class="dock-body">
                 <div class="dock-actions">
+                  <span class="room-id-chip" id="roomIdDisplay"></span>
                   <button class="small-button" id="copyInviteButton" type="button">Copy Link</button>
+                  <button class="small-button" id="shareRoomButton" type="button">Share</button>
                 </div>
+                <div class="share-panel hidden" id="sharePanel"></div>
                 <div class="players-list" id="playersList"></div>
                 <button class="small-button" id="addBotButton" type="button">Add Bot</button>
                 <button id="startMatchButton" type="button">Start Match</button>
@@ -141,11 +303,11 @@
 
             <section class="panel settings-panel hidden" id="settingsPanel">
               <div class="panel-header">
-                <h2>Settings</h2>
+                <h2>Championship Rules</h2>
                 <button class="small-button" id="settingsToggleButton" type="button">Expand</button>
               </div>
               <form class="admin-login-form" id="adminLoginForm">
-                <input id="adminPasswordInput" type="password" autocomplete="current-password" placeholder="Admin password">
+                <input id="adminPasswordInput" type="password" autocomplete="current-password" placeholder="Rules password">
                 <button class="small-button" type="submit">Login</button>
               </form>
               <form class="settings-form hidden" id="settingsForm">
@@ -156,7 +318,13 @@
                   <label>4th <input id="settingFourth" type="number" min="0" max="100"></label>
                   <label>Lock win <input id="settingLockWin" type="number" min="0" max="100"></label>
                   <label>Lock lose <input id="settingLockLose" type="number" min="-100" max="100"></label>
-                  <label>Play secs <input id="settingTurnSeconds" type="number" min="5" max="300"></label>
+                  <label>Play secs
+                    <select id="settingTurnSeconds">
+                      <option value="25">25</option>
+                      <option value="30">30</option>
+                      <option value="45">45</option>
+                    </select>
+                  </label>
                   <label>Between secs <input id="settingBetweenSeconds" type="number" min="0" max="300"></label>
                   <label>Final secs <input id="settingFinalSeconds" type="number" min="0" max="300"></label>
                   <label>Break secs <input id="settingBreakSeconds" type="number" min="0" max="600"></label>
@@ -170,7 +338,7 @@
                   <label>Infractions <input id="settingInfractions" type="number" min="1" max="20"></label>
                   <label>Penalty <input id="settingPenalty" type="number" min="-100" max="0"></label>
                 </div>
-                <button class="small-button" type="submit">Save Settings</button>
+                <button class="small-button" type="submit">Save Rules</button>
               </form>
             </section>
           </aside>
@@ -181,7 +349,7 @@
                 <div class="status-label" id="turnLabel">Waiting</div>
                 <div class="status-sub" id="statusSub">Room not started</div>
               </div>
-              <div class="timer" id="turnTimer">45</div>
+              <div class="timer" id="turnTimer">30</div>
             </div>
 
             <div class="board" id="board"></div>
@@ -215,6 +383,6 @@
       <div class="toast hidden" id="toast"></div>
     </div>
 
-    <script type="module" src="/app.js?v=40"></script>
+    <script type="module" src="/app.js?v=44"></script>
   </body>
 </html>
