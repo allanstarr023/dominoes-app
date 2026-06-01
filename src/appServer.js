@@ -2000,6 +2000,10 @@ function contentTypeFor(filePath) {
     return "image/svg+xml";
   }
 
+  if (extension === ".ico") {
+    return "image/x-icon";
+  }
+
   return "application/octet-stream";
 }
 

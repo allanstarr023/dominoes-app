@@ -1,4 +1,4 @@
-import { clearPixiBoard, renderPixiBoard } from "./pixiBoardRenderer.js?v=44";
+import { clearPixiBoard, renderPixiBoard } from "./pixiBoardRenderer.js?v=45";
 
 const state = {
   room: null,
@@ -2648,7 +2648,7 @@ function registerServiceWorker() {
     return;
   }
 
-    navigator.serviceWorker.register("/sw.js?v=44").catch(() => {});
+    navigator.serviceWorker.register("/sw.js?v=45").catch(() => {});
 }
 
 function showToast(message) {

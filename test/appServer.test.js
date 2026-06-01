@@ -40,12 +40,15 @@ test("serves PWA manifest and icon assets", async () => {
     const manifestResponse = await fetch(`${baseUrl}/manifest.webmanifest`);
     const manifest = await manifestResponse.json();
     const iconResponse = await fetch(`${baseUrl}/icon.svg`);
+    const faviconResponse = await fetch(`${baseUrl}/favicon.ico`);
 
     assert.equal(manifestResponse.status, 200);
     assert.equal(manifestResponse.headers.get("content-type"), "application/manifest+json; charset=utf-8");
     assert.equal(manifest.display, "standalone");
     assert.equal(iconResponse.status, 200);
     assert.equal(iconResponse.headers.get("content-type"), "image/svg+xml");
+    assert.equal(faviconResponse.status, 200);
+    assert.equal(faviconResponse.headers.get("content-type"), "image/x-icon");
   } finally {
     await closeTestServer(server);
   }
