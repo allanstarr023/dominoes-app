@@ -10,6 +10,9 @@ import {
   BATHROOM_BREAK_DURATION_MS,
   FINAL_REVIEW_DURATION_MS,
   MATCH_STATUS,
+  REACTION_DURATION_MS,
+  SLAM_DURATION_MS,
+  TAKE_DAT_DURATION_MS,
   addChatMessage,
   advanceFromGameBreak,
   completeMatchReview,
@@ -17,11 +20,16 @@ import {
   handleTurnTimeout,
   passTurn,
   playTile,
+  releaseAnimationLock,
   requestBathroomBreak,
   resumeBathroomBreak,
+  setPlayerReaction,
   setPlayerConnection,
+  slamTile,
   startMatch,
-  turnRemainingMs
+  turnRemainingMs,
+  useSeedToBoard,
+  useTakeDat
 } from "../src/matchEngine.js";
 
 const players = ["p1", "p2", "p3", "p4"];
@@ -62,6 +70,203 @@ test("requires double-six as the first move of the first game", () => {
   assert.throws(
     () => playTile(match, "p1", { tileId: "6:0" }, { now: 2000 }),
     /Opening move must be 6:6/
+  );
+});
+
+test("slam plays a legal tile once and delays turn progression until the animation ends", () => {
+  const match = startMatch({
+    players,
+    matchLength: 5,
+    now: 1000,
+    hands: basicHands()
+  });
+
+  const slammed = slamTile(match, "p1", { tileId: "6:6", end: "opening" }, { now: 2000 });
+
+  assert.equal(slammed.game.currentPlayerId, "p1");
+  assert.equal(slammed.game.slamUsedByPlayerId.p1, true);
+  assert.equal(slammed.game.animationLock.type, "slam");
+  assert.equal(slammed.game.animationLock.tileId, "6:6");
+  assert.equal(slammed.game.animationLock.expiresAt, 2000 + SLAM_DURATION_MS);
+  assert.equal(slammed.game.lastAction.effect, "slam");
+  assert.equal(slammed.game.lastAction.move.end, "opening");
+  assert.throws(
+    () => playTile(slammed, "p1", { tileId: "6:0", end: "left" }, { now: 2500 }),
+    /Animation is still playing/
+  );
+
+  const released = releaseAnimationLock(slammed, { now: 2000 + SLAM_DURATION_MS });
+
+  assert.equal(released.game.animationLock, null);
+  assert.equal(released.game.currentPlayerId, "p2");
+  assert.equal(released.game.turnStartedAt, 2000 + SLAM_DURATION_MS);
+  assert.equal(released.game.turnDeadlineAt, 2000 + SLAM_DURATION_MS + released.turnDurationMs);
+});
+
+test("animation lock rejects gameplay actions and protects the next turn timer", () => {
+  const match = startMatch({
+    players,
+    matchLength: 5,
+    now: 1000,
+    hands: basicHands()
+  });
+  const slammed = slamTile(match, "p1", { tileId: "6:6", end: "opening" }, { now: 2000 });
+
+  assert.equal(turnRemainingMs(slammed, 2500), SLAM_DURATION_MS - 500);
+  assert.throws(
+    () => playTile(slammed, "p1", { tileId: "6:0", end: "left" }, { now: 2500 }),
+    /Animation is still playing/
+  );
+  assert.throws(
+    () => passTurn(slammed, "p1", { now: 2500 }),
+    /Animation is still playing/
+  );
+  assert.throws(
+    () => useSeedToBoard(slammed, "p1", { now: 2500 }),
+    /Animation is still playing/
+  );
+  assert.throws(
+    () => slamTile(slammed, "p1", { tileId: "6:0", end: "left" }, { now: 2500 }),
+    /Animation is still playing/
+  );
+  assert.throws(
+    () => handleTurnTimeout(slammed, { now: 2500 }),
+    /Animation is still playing/
+  );
+
+  const released = releaseAnimationLock(slammed, { now: 7000 });
+
+  assert.equal(released.game.currentPlayerId, "p2");
+  assert.equal(released.game.turnStartedAt, 7000);
+  assert.equal(released.game.turnDeadlineAt, 7000 + released.turnDurationMs);
+  assert.equal(turnRemainingMs(released, 7000), released.turnDurationMs);
+});
+
+test("slam usage is rejected a second time in the same round and resets next round", () => {
+  const match = startMatch({
+    players,
+    matchLength: 5,
+    now: 1000,
+    hands: basicHands()
+  });
+  const slammed = slamTile(match, "p1", { tileId: "6:6", end: "opening" }, { now: 2000 });
+  const released = releaseAnimationLock(slammed, { now: 7000 });
+  const p2Passed = passTurn(released, "p2", { now: 8000 });
+  const p3Passed = passTurn(p2Passed, "p3", { now: 9000 });
+  const p4Passed = passTurn(p3Passed, "p4", { now: 10_000 });
+
+  assert.equal(p4Passed.game.currentPlayerId, "p1");
+  assert.throws(
+    () => slamTile(p4Passed, "p1", { tileId: "6:0", end: "left" }, { now: 11_000 }),
+    /already used Slam/
+  );
+
+  const gameBreak = playTile(p4Passed, "p1", { tileId: "6:0", end: "left" }, { now: 12_000 });
+  const nextGame = advanceFromGameBreak(gameBreak, {
+    now: 80_000,
+    hands: {
+      p1: [t(1, 0), t(2, 0)],
+      p2: [t(3, 3)],
+      p3: [t(4, 4)],
+      p4: [t(5, 5)]
+    }
+  });
+
+  assert.equal(nextGame.currentGameNumber, 2);
+  assert.equal(nextGame.game.slamUsedByPlayerId.p1, false);
+  assert.equal(nextGame.game.animationLock, null);
+});
+
+test("slam validates normal pip and end rules", () => {
+  const match = startMatch({
+    players,
+    matchLength: 5,
+    now: 1000,
+    hands: basicHands()
+  });
+
+  assert.throws(
+    () => slamTile(match, "p1", { tileId: "6:0", end: "left" }, { now: 2000 }),
+    /Opening move must be 6:6/
+  );
+});
+
+test("take dat can be used once without changing turn order", () => {
+  const match = startMatch({
+    players,
+    matchLength: 5,
+    now: 1000,
+    hands: basicHands()
+  });
+  const afterTaunt = useTakeDat(match, "p3", { now: 2000 });
+
+  assert.equal(afterTaunt.game.currentPlayerId, "p1");
+  assert.equal(afterTaunt.game.turnDeadlineAt, match.game.turnDeadlineAt);
+  assert.equal(afterTaunt.game.takeDatUsedByPlayerId.p3, true);
+  assert.equal(afterTaunt.game.lastTakeDat.type, "takeDat");
+  assert.equal(afterTaunt.game.lastTakeDat.playerId, "p3");
+  assert.equal(afterTaunt.game.lastTakeDat.expiresAt, 2000 + TAKE_DAT_DURATION_MS);
+});
+
+test("take dat repeated use is rejected and resets next round", () => {
+  const match = startMatch({
+    players,
+    matchLength: 5,
+    now: 1000,
+    hands: {
+      p1: [t(6, 6)],
+      p2: [t(5, 5)],
+      p3: [t(4, 4)],
+      p4: [t(3, 3)]
+    }
+  });
+  const afterTaunt = useTakeDat(match, "p1", { now: 2000 });
+
+  assert.throws(
+    () => useTakeDat(afterTaunt, "p1", { now: 3000 }),
+    /already used TAKE DAT/
+  );
+
+  const gameBreak = playTile(afterTaunt, "p1", { tileId: "6:6", end: "opening" }, { now: 4000 });
+  const nextGame = advanceFromGameBreak(gameBreak, {
+    now: 80_000,
+    hands: {
+      p1: [t(1, 0), t(2, 0)],
+      p2: [t(3, 3)],
+      p3: [t(4, 4)],
+      p4: [t(5, 5)]
+    }
+  });
+
+  assert.equal(nextGame.game.takeDatUsedByPlayerId.p1, false);
+  assert.equal(nextGame.game.lastTakeDat, null);
+});
+
+test("valid player reactions are accepted with a seven-second expiry", () => {
+  const match = startMatch({
+    players,
+    matchLength: 5,
+    now: 1000,
+    hands: basicHands()
+  });
+  const reacted = setPlayerReaction(match, "p2", "laughing", { now: 2000 });
+
+  assert.equal(reacted.reactionsByPlayerId.p2.type, "laughing");
+  assert.equal(reacted.reactionsByPlayerId.p2.createdAt, 2000);
+  assert.equal(reacted.reactionsByPlayerId.p2.expiresAt, 2000 + REACTION_DURATION_MS);
+});
+
+test("invalid player reaction types are rejected", () => {
+  const match = startMatch({
+    players,
+    matchLength: 5,
+    now: 1000,
+    hands: basicHands()
+  });
+
+  assert.throws(
+    () => setPlayerReaction(match, "p2", "dancing", { now: 2000 }),
+    /Invalid reaction type/
   );
 });
 

@@ -1,4 +1,9 @@
-import { clearPixiBoard, renderPixiBoard } from "./pixiBoardRenderer.js?v=45";
+import {
+  loadAudioPreference,
+  playTileSound,
+  saveAudioPreference
+} from "./audio.js?v=53";
+import { clearPixiBoard, renderPixiBoard } from "./pixiBoardRenderer.js?v=53";
 
 const state = {
   room: null,
@@ -20,23 +25,57 @@ const state = {
   sharePanelOpen: false,
   settingsExpanded: false,
   statsLoadedForMatchId: null,
-  lastAnimatedActionKey: null
+  lastAnimatedActionKey: null,
+  lastSoundActionKey: null,
+  soundActionPrimed: false,
+  soundEnabled: loadAudioPreference(),
+  boardFullscreen: false,
+  slamArmed: false,
+  takeDatTimer: null,
+  reactionTimer: null
 };
 
 const CHAT_BLOCK_MINUTES = 5;
 const MAX_PLAYERS_PER_ROOM = 7;
 const ACTIVE_PLAYERS_PER_GAME = 4;
+const REACTION_FACES = Object.freeze({
+  laughing: { label: "Laughing", face: "\uD83D\uDE02" },
+  angry: { label: "Angry", face: "\uD83D\uDE20" },
+  serious: { label: "Serious", face: "\uD83D\uDE10" },
+  sick: { label: "Sick", face: "\uD83E\uDD22" },
+  confused: { label: "Confused", face: "\uD83D\uDE15" }
+});
 const PLAYER_AVATARS = Object.freeze([
-  { id: "crown", label: "Smile", graphic: "\uD83D\uDE00", color: "#c98319" },
-  { id: "rocket", label: "Cool", graphic: "\uD83D\uDE0E", color: "#cf4d3f" },
-  { id: "star", label: "Laugh", graphic: "\uD83D\uDE04", color: "#f0b940" },
-  { id: "bolt", label: "Wink", graphic: "\uD83D\uDE09", color: "#2d65b3" },
-  { id: "shield", label: "Think", graphic: "\uD83E\uDD14", color: "#174d3f" },
-  { id: "gem", label: "Grin", graphic: "\uD83D\uDE01", color: "#2e9a9b" },
-  { id: "flame", label: "Focused", graphic: "\uD83D\uDE10", color: "#cf4d3f" },
-  { id: "moon", label: "Surprise", graphic: "\uD83D\uDE2E", color: "#6f63b6" },
-  { id: "sun", label: "Joy", graphic: "\uD83D\uDE0A", color: "#d79817" },
-  { id: "anchor", label: "Champion", graphic: "\uD83E\uDD29", color: "#2f6f88" }
+  { id: "electrician", label: "Electrician", graphic: "\uD83E\uDDD1\u200D\uD83D\uDD27", color: "#c98319" },
+  { id: "plumber", label: "Plumber", graphic: "\uD83D\uDEE0\uFE0F", color: "#2f6f88" },
+  { id: "it-pro", label: "IT Pro", graphic: "\uD83E\uDDD1\u200D\uD83D\uDCBB", color: "#2d65b3" },
+  { id: "secretary", label: "Secretary", graphic: "\uD83E\uDDD1\u200D\uD83D\uDCBC", color: "#6f63b6" },
+  { id: "president", label: "President", graphic: "\uD83E\uDD35", color: "#8a4f2a" },
+  { id: "footballer", label: "Football Star", graphic: "\uD83C\uDFC8", color: "#174d3f" },
+  { id: "basketballer", label: "Basketball Star", graphic: "\uD83C\uDFC0", color: "#cf6b2b" },
+  { id: "cricketer", label: "Cricket Star", graphic: "\uD83C\uDFCF", color: "#176b54" },
+  { id: "tennis-player", label: "Tennis Star", graphic: "\uD83C\uDFBE", color: "#6e8b2f" },
+  { id: "sprinter", label: "Sprinter", graphic: "\uD83C\uDFC3", color: "#cf4d3f" },
+  { id: "boxer", label: "Boxer", graphic: "\uD83E\uDD4A", color: "#a13f35" },
+  { id: "chef", label: "Chef", graphic: "\uD83E\uDDD1\u200D\uD83C\uDF73", color: "#b98218" },
+  { id: "doctor", label: "Doctor", graphic: "\uD83E\uDDD1\u200D\u2695\uFE0F", color: "#2e7d95" },
+  { id: "nurse", label: "Nurse", graphic: "\uD83D\uDC69\u200D\u2695\uFE0F", color: "#cf4d78" },
+  { id: "police", label: "Police", graphic: "\uD83D\uDC6E", color: "#1f4d7a" },
+  { id: "firefighter", label: "Firefighter", graphic: "\uD83E\uDDD1\u200D\uD83D\uDE92", color: "#b7372f" },
+  { id: "pilot", label: "Pilot", graphic: "\uD83E\uDDD1\u200D\u2708\uFE0F", color: "#276f9b" },
+  { id: "teacher", label: "Teacher", graphic: "\uD83E\uDDD1\u200D\uD83C\uDFEB", color: "#6f63b6" },
+  { id: "mechanic", label: "Mechanic", graphic: "\uD83D\uDC68\u200D\uD83D\uDD27", color: "#4f645d" },
+  { id: "carpenter", label: "Carpenter", graphic: "\uD83E\uDDD1\u200D\uD83E\uDE9A", color: "#8a5f33" },
+  { id: "farmer", label: "Farmer", graphic: "\uD83E\uDDD1\u200D\uD83C\uDF3E", color: "#648b35" },
+  { id: "musician", label: "Musician", graphic: "\uD83E\uDDD1\u200D\uD83C\uDFA4", color: "#9c4f98" },
+  { id: "artist", label: "Artist", graphic: "\uD83E\uDDD1\u200D\uD83C\uDFA8", color: "#2e9a9b" },
+  { id: "judge", label: "Judge", graphic: "\uD83E\uDDD1\u200D\u2696\uFE0F", color: "#32383a" },
+  { id: "scientist", label: "Scientist", graphic: "\uD83E\uDDD1\u200D\uD83D\uDD2C", color: "#3d7a80" },
+  { id: "engineer", label: "Engineer", graphic: "\uD83E\uDDD1\u200D\uD83C\uDFED", color: "#5d6870" },
+  { id: "driver", label: "Driver", graphic: "\uD83E\uDDD1\u200D\uD83D\uDE9A", color: "#425f89" },
+  { id: "barber", label: "Barber", graphic: "\uD83D\uDC88", color: "#a13f35" },
+  { id: "builder", label: "Builder", graphic: "\uD83D\uDC77", color: "#d79817" },
+  { id: "champion", label: "Champion", graphic: "\uD83E\uDD47", color: "#176b54" }
 ]);
 
 const els = {
@@ -47,6 +86,9 @@ const els = {
   topEndSessionButton: document.querySelector("#topEndSessionButton"),
   portalNotice: document.querySelector("#portalNotice"),
   setupPanel: document.querySelector("#setupPanel"),
+  portalCapacitySummary: document.querySelector("#portalCapacitySummary"),
+  publicChampionshipList: document.querySelector("#publicChampionshipList"),
+  refreshLobbyButton: document.querySelector("#refreshLobbyButton"),
   joinPanel: document.querySelector("#joinPanel"),
   adminPortal: document.querySelector("#adminPortal"),
   portalAdminLoginForm: document.querySelector("#portalAdminLoginForm"),
@@ -106,10 +148,17 @@ const els = {
   sharePanel: document.querySelector("#sharePanel"),
   turnLabel: document.querySelector("#turnLabel"),
   statusSub: document.querySelector("#statusSub"),
+  statusLobbyReactions: document.querySelector("#statusLobbyReactions"),
   turnTimer: document.querySelector("#turnTimer"),
+  boardFullscreenButton: document.querySelector("#boardFullscreenButton"),
   board: document.querySelector("#board"),
   hand: document.querySelector("#hand"),
   seedBoardButton: document.querySelector("#seedBoardButton"),
+  slamButton: document.querySelector("#slamButton"),
+  takeDatButton: document.querySelector("#takeDatButton"),
+  reactionSelect: document.querySelector("#reactionSelect"),
+  reactionButton: document.querySelector("#reactionButton"),
+  soundToggle: document.querySelector("#soundToggle"),
   endChoice: document.querySelector("#endChoice"),
   passButton: document.querySelector("#passButton"),
   tablePanel: document.querySelector(".table-panel"),
@@ -284,6 +333,31 @@ function bindEvents() {
 
     state.room = result.room;
     render();
+  });
+
+  els.slamButton.addEventListener("click", async () => {
+    await handleSlamClick();
+  });
+
+  els.takeDatButton.addEventListener("click", async () => {
+    await useTakeDat();
+  });
+
+  els.reactionButton.addEventListener("click", async () => {
+    await sendReaction();
+  });
+
+  els.soundToggle.addEventListener("change", () => {
+    state.soundEnabled = els.soundToggle.checked;
+    saveAudioPreference(state.soundEnabled);
+  });
+
+  els.refreshLobbyButton.addEventListener("click", () => {
+    loadPortalStatus();
+  });
+
+  els.boardFullscreenButton.addEventListener("click", () => {
+    toggleBoardFullscreen();
   });
 
   els.chatForm.addEventListener("submit", async (event) => {
@@ -488,6 +562,17 @@ function bindEvents() {
     }
   });
 
+  document.addEventListener("fullscreenchange", () => {
+    if (!document.fullscreenElement && state.boardFullscreen) {
+      state.boardFullscreen = false;
+      document.body.classList.remove("board-fullscreen-active");
+      renderFullscreenButton();
+      if (state.room?.match?.game) {
+        renderTable();
+      }
+    }
+  });
+
   window.addEventListener("pagehide", sendExitSignal);
 }
 
@@ -506,6 +591,9 @@ async function loadRoom(roomId) {
 
     if (state.playerId && isSeated(state.playerId)) {
       await markReconnected();
+    }
+
+    if (state.room?.status === "active" || (state.playerId && isSeated(state.playerId))) {
       subscribe();
     }
 
@@ -549,8 +637,10 @@ async function loadPortalStatus() {
   try {
     state.portalStatus = await api("/api/portal-status");
     renderPortalNotice();
+    renderPortalSummary();
   } catch {
     state.portalStatus = null;
+    renderPortalSummary();
   }
 }
 
@@ -611,7 +701,7 @@ async function markReconnected() {
 }
 
 function subscribe() {
-  if (!state.roomId || !state.playerId) {
+  if (!state.roomId) {
     return;
   }
 
@@ -619,7 +709,8 @@ function subscribe() {
     state.events.close();
   }
 
-  state.events = new EventSource(`/api/rooms/${state.roomId}/events?playerId=${encodeURIComponent(state.playerId)}`);
+  const query = state.playerId ? `?playerId=${encodeURIComponent(state.playerId)}` : "";
+  state.events = new EventSource(`/api/rooms/${state.roomId}/events${query}`);
   state.events.addEventListener("room", (event) => {
     state.room = JSON.parse(event.data);
     render();
@@ -650,6 +741,7 @@ function subscribe() {
 
 function render() {
   renderPortalNotice();
+  renderPortalSummary();
 
   if (state.adminView) {
     startAdminAutoRefresh();
@@ -668,20 +760,21 @@ function render() {
   els.adminPortal.classList.add("hidden");
   const hasRoom = Boolean(state.room);
   const seated = state.playerId && isSeated(state.playerId);
+  const spectating = hasRoom && !seated && state.room.status === "active";
 
   els.setupPanel.classList.toggle("hidden", hasRoom);
-  els.joinPanel.classList.toggle("hidden", !hasRoom || seated);
-  els.tableView.classList.toggle("hidden", !hasRoom || !seated);
+  els.joinPanel.classList.toggle("hidden", !hasRoom || seated || spectating);
+  els.tableView.classList.toggle("hidden", !hasRoom || (!seated && !spectating));
 
   els.roomLine.textContent = hasRoom ? `Room ${state.room.id}` : "No room selected";
-  els.sessionPill.textContent = seated ? playerName(state.playerId) : "Not seated";
+  els.sessionPill.textContent = seated ? playerName(state.playerId) : spectating ? "Spectating" : "Not seated";
 
   if (!hasRoom) {
     clearTimer();
     return;
   }
 
-  if (!seated) {
+  if (!seated && !spectating) {
     els.joinRoomTitle.textContent = `Join ${state.room.id}`;
     renderAvatarSelect(els.roomJoinAvatarInput, usedAvatarIds(), els.roomJoinAvatarInput.value);
     clearTimer();
@@ -706,8 +799,13 @@ function render() {
 function renderPlayers() {
   const match = state.room.match;
   const currentPlayerId = match?.game?.currentPlayerId;
+  const canReportPlayers = Boolean(state.playerId && isSeated(state.playerId));
 
-  els.playersList.innerHTML = state.room.seats.map((seat) => {
+  const hostCanManageRoster = state.room.status === "waiting"
+    && !match
+    && state.playerId === state.room.hostPlayerId;
+
+  els.playersList.innerHTML = state.room.seats.map((seat, index) => {
     const score = match?.rawScores?.[seat.playerId] ?? 0;
     const infractions = match?.infractions?.[seat.playerId] ?? 0;
     const handCount = match?.game?.handCounts?.[seat.playerId];
@@ -720,16 +818,26 @@ function renderPlayers() {
       lobby ? "lobby" : "",
       seat.connected ? "" : "exited"
     ].filter(Boolean).join(" ");
+    const rosterControls = hostCanManageRoster
+      ? `
+        <div class="roster-controls">
+          <button class="plain-action roster-move-button" type="button" data-player-id="${escapeHtml(seat.playerId)}" data-direction="up" ${index === 0 ? "disabled" : ""}>Up</button>
+          <button class="plain-action roster-move-button" type="button" data-player-id="${escapeHtml(seat.playerId)}" data-direction="down" ${index === state.room.seats.length - 1 ? "disabled" : ""}>Down</button>
+          ${seat.playerId === state.room.hostPlayerId ? "" : `<button class="plain-action roster-remove-button" type="button" data-player-id="${escapeHtml(seat.playerId)}">Remove</button>`}
+        </div>
+      `
+      : "";
 
     return `
       <div class="player-row ${rowClasses}">
         ${avatarHtml(seat.avatarId, "player-row-avatar")}
         <div>
           <div class="player-name">${escapeHtml(seat.name)}</div>
-          <div class="player-meta">${role} | ${connected}${handCount === undefined ? "" : ` | ${handCount} tiles`} | ${infractions} inf</div>
+          <div class="player-meta">${role} | ${connected}${handCount === undefined ? "" : ` | ${handCount} tiles`} | ${infractions} inf${hostCanManageRoster && index < ACTIVE_PLAYERS_PER_GAME ? " | starts" : ""}</div>
+          ${rosterControls}
         </div>
         <strong>${score}</strong>
-        ${seat.playerId !== state.playerId && !seat.isBot
+        ${canReportPlayers && seat.playerId !== state.playerId && !seat.isBot
           ? `<button class="plain-action player-report-button" type="button" data-player-id="${escapeHtml(seat.playerId)}">Report</button>`
           : ""}
       </div>
@@ -737,6 +845,7 @@ function renderPlayers() {
   }).join("");
 
   bindPlayerReportButtons();
+  bindRosterManageButtons();
 
   const botCount = state.room.seats.filter((seat) => seat.isBot).length;
   const showAddBot = state.room.status === "waiting"
@@ -767,7 +876,8 @@ function renderPlayers() {
   els.bathroomBreakButton.disabled = !breakVisible
     || breakUsed
     || match.status !== "active"
-    || !match.game;
+    || !match.game
+    || Boolean(match.game.animationLock);
   els.bathroomBreakButton.textContent = breakUsed ? "Break Used" : "Bath Break";
   els.resumeBreakButton.classList.toggle("hidden", !canResumeBreak);
   els.resumeBreakButton.disabled = !canResumeBreak;
@@ -777,6 +887,55 @@ function renderPlayers() {
   setButtonVisibility(els.topEndSessionButton, showEndSession && !endDisabled, endDisabled);
   els.hostActionBar.classList.toggle("hidden", !showStartMatch && !(showEndSession && !endDisabled));
   renderShareControls();
+}
+
+function bindRosterManageButtons() {
+  els.playersList.querySelectorAll(".roster-move-button").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        const result = await api(`/api/rooms/${state.roomId}/move-player`, {
+          method: "POST",
+          body: {
+            playerId: state.playerId,
+            targetPlayerId: button.dataset.playerId,
+            direction: button.dataset.direction
+          }
+        });
+
+        state.room = result.room;
+        render();
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+  });
+
+  els.playersList.querySelectorAll(".roster-remove-button").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const target = state.room.seats.find((seat) => seat.playerId === button.dataset.playerId);
+      const confirmed = window.confirm(`Remove ${target?.name ?? "this player"} from the waiting room?`);
+
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        const result = await api(`/api/rooms/${state.roomId}/remove-player`, {
+          method: "POST",
+          body: {
+            playerId: state.playerId,
+            targetPlayerId: button.dataset.playerId
+          }
+        });
+
+        state.room = result.room;
+        showToast("Player removed");
+        render();
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+  });
 }
 
 function bindPlayerReportButtons() {
@@ -967,12 +1126,17 @@ function renderTable() {
   const selectedTile = currentSelectedTile(game);
   const reviewMode = Boolean(match?.betweenGames || match?.finalReview || match?.status === "completed");
 
+  renderFullscreenButton();
   clearPixiBoard(els.board);
   els.tablePanel.classList.toggle("review-mode", reviewMode);
+  els.statusLobbyReactions.innerHTML = renderLobbyReactions(match);
+  scheduleTakeDatClear(match);
+  scheduleReactionClear(match);
+  playSoundForLatestAction(match);
 
   if (state.room.status === "cancelled") {
     els.turnLabel.textContent = "Session Ended";
-    els.statusSub.textContent = "The host ended this table";
+    els.statusSub.textContent = roomCancelMessage(state.room);
     els.board.className = "board is-empty";
     els.board.innerHTML = renderEndedSessionControls();
     bindNewSessionControl();
@@ -999,7 +1163,7 @@ function renderTable() {
     els.statusSub.textContent = `Winner: ${match.winnerIds.map(playerName).join(", ")}`;
   } else if (match.status === "cancelled") {
     els.turnLabel.textContent = "Session Ended";
-    els.statusSub.textContent = "The host ended this table";
+    els.statusSub.textContent = roomCancelMessage(state.room);
     els.board.className = "board is-empty";
     els.board.innerHTML = renderEndedSessionControls();
     bindNewSessionControl();
@@ -1012,7 +1176,9 @@ function renderTable() {
     els.statusSub.textContent = "Next round starts after score review";
   } else {
     els.turnLabel.textContent = `${playerName(game.currentPlayerId)} to play`;
-    els.statusSub.textContent = game.requiredOpeningTileId
+    els.statusSub.textContent = game.animationLock?.type === "slam"
+      ? `${playerName(game.animationLock.playerId)} slammed the table`
+      : game.requiredOpeningTileId
       ? `Opening tile: ${game.requiredOpeningTileId}`
       : "Live";
   }
@@ -1038,11 +1204,12 @@ function renderTable() {
   if (!game || game.board.plays.length === 0) {
     const canPose = selectedTile && playableEnds(selectedTile, game).includes("opening");
 
-    els.board.className = "board";
-    els.board.innerHTML = renderTableSeats(match) + renderPlayAnimation(match);
+    els.board.className = boardClassName(game);
+    els.board.innerHTML = renderTableSeats(match) + renderTableReactions(match) + renderTakeDat(match) + renderPlayAnimation(match);
     void renderPixiBoard(els.board, {
       plays: [],
       openingEnabled: canPose,
+      slamLock: game.animationLock,
       onTarget: playSelectedTile
     });
     return;
@@ -1050,14 +1217,29 @@ function renderTable() {
 
   const selectedEnds = selectedTile ? playableEnds(selectedTile, game) : [];
 
-  els.board.className = game.board.plays.length >= 11 ? "board board-crowded" : "board";
+  els.board.className = boardClassName(game);
   els.board.dataset.tileCount = String(game.board.plays.length);
-  els.board.innerHTML = renderTableSeats(match) + renderSeedReveal(match) + renderPlayAnimation(match);
+  els.board.innerHTML = renderTableSeats(match) + renderTableReactions(match) + renderSeedReveal(match) + renderTakeDat(match) + renderPlayAnimation(match);
   void renderPixiBoard(els.board, {
     plays: game.board.plays,
     selectedEnds,
+    slamLock: game.animationLock,
     onTarget: playSelectedTile
   });
+}
+
+function boardClassName(game) {
+  const classes = ["board"];
+
+  if (game?.board?.plays?.length >= 11) {
+    classes.push("board-crowded");
+  }
+
+  if (game?.animationLock?.type === "slam") {
+    classes.push("slam-shaking");
+  }
+
+  return classes.join(" ");
 }
 
 function renderTableSeats(match) {
@@ -1086,8 +1268,84 @@ function renderTableSeats(match) {
   `;
 }
 
+function renderTableReactions(match) {
+  if (!match?.game) {
+    return "";
+  }
+
+  const reactions = currentReactions(match);
+
+  if (Object.keys(reactions).length === 0) {
+    return "";
+  }
+
+  const positions = ["south", "west", "north", "east"];
+  const activeReactionHtml = match.playerOrder
+    .slice(0, ACTIVE_PLAYERS_PER_GAME)
+    .map((playerId, index) => {
+      const reaction = reactions[playerId];
+
+      if (!reaction) {
+        return "";
+      }
+
+      return `
+        <div class="table-reaction reaction-${positions[index]}" title="${escapeHtml(playerName(playerId))} ${escapeHtml(reactionLabel(reaction.type))}">
+          ${reactionFace(reaction.type)}
+        </div>
+      `;
+    })
+    .join("");
+
+  if (!activeReactionHtml) {
+    return "";
+  }
+
+  return `
+    <div class="table-reactions-layer" aria-live="polite">
+      ${activeReactionHtml}
+    </div>
+  `;
+}
+
+function renderLobbyReactions(match) {
+  if (!match?.game) {
+    return "";
+  }
+
+  const reactions = currentReactions(match);
+  const lobbyReactionHtml = state.room.seats
+    .filter((seat) => !match.playerOrder.includes(seat.playerId) && reactions[seat.playerId])
+    .map((seat) => `
+      <div class="lobby-reaction-chip">
+        ${avatarHtml(seat.avatarId, "lobby-reaction-avatar")}
+        <span>${reactionFace(reactions[seat.playerId].type)}</span>
+      </div>
+    `)
+    .join("");
+
+  return lobbyReactionHtml;
+}
+
+function currentReactions(match) {
+  const now = Date.now();
+
+  return Object.fromEntries(
+    Object.entries(match?.reactionsByPlayerId ?? {})
+      .filter(([, reaction]) => reaction && Number(reaction.expiresAt ?? 0) > now)
+  );
+}
+
+function reactionFace(type) {
+  return REACTION_FACES[type]?.face ?? "";
+}
+
+function reactionLabel(type) {
+  return REACTION_FACES[type]?.label ?? "Reaction";
+}
+
 function renderPlayAnimation(match) {
-  const action = match?.lastAction ?? match?.game?.lastAction;
+  const action = latestVisibleAction(match);
   const player = state.room.seats.find((seat) => seat.playerId === action?.playerId);
   const iAmLobby = Boolean(match?.game && !match.playerOrder.includes(state.playerId));
   const isBotAction = Boolean(player?.isBot);
@@ -1127,25 +1385,176 @@ function renderPlayAnimation(match) {
   `;
 }
 
+function renderTakeDat(match) {
+  const taunt = match?.game?.lastTakeDat;
+
+  if (!taunt || Date.now() >= taunt.expiresAt) {
+    return "";
+  }
+
+  const durationMs = Math.max(1000, Number(taunt.durationMs ?? 5000));
+
+  return `
+    <div class="take-dat-taunt" role="status" aria-live="polite" style="--take-dat-duration: ${durationMs}ms;">
+      <span>TAKE DAT</span>
+      <small>${escapeHtml(playerName(taunt.playerId))}</small>
+    </div>
+  `;
+}
+
+function scheduleTakeDatClear(match) {
+  if (state.takeDatTimer) {
+    clearTimeout(state.takeDatTimer);
+    state.takeDatTimer = null;
+  }
+
+  const taunt = match?.game?.lastTakeDat;
+
+  if (!taunt) {
+    return;
+  }
+
+  const remainingMs = Number(taunt.expiresAt ?? 0) - Date.now();
+
+  if (remainingMs <= 0) {
+    return;
+  }
+
+  state.takeDatTimer = setTimeout(() => {
+    const currentTaunt = state.room?.match?.game?.lastTakeDat;
+
+    if (currentTaunt?.at === taunt.at && currentTaunt?.playerId === taunt.playerId) {
+      renderTable();
+    }
+  }, remainingMs + 60);
+}
+
+function scheduleReactionClear(match) {
+  if (state.reactionTimer) {
+    clearTimeout(state.reactionTimer);
+    state.reactionTimer = null;
+  }
+
+  const reactions = currentReactions(match);
+  const nextExpiry = Math.min(
+    ...Object.values(reactions).map((reaction) => Number(reaction.expiresAt ?? Infinity))
+  );
+
+  if (!Number.isFinite(nextExpiry)) {
+    return;
+  }
+
+  const remainingMs = nextExpiry - Date.now();
+
+  if (remainingMs <= 0) {
+    return;
+  }
+
+  state.reactionTimer = setTimeout(() => {
+    if (state.room?.match?.game) {
+      renderTable();
+    }
+  }, remainingMs + 60);
+}
+
+function latestVisibleAction(match) {
+  const candidates = [match?.lastAction, match?.game?.lastAction]
+    .filter((action) => action && ["play", "timeoutAutoPlay"].includes(action.type) && action.move);
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return candidates.sort((first, second) => {
+    if ((second.at ?? 0) !== (first.at ?? 0)) {
+      return (second.at ?? 0) - (first.at ?? 0);
+    }
+
+    return second.type === "timeoutAutoPlay" ? 1 : -1;
+  })[0];
+}
+
+function playSoundForLatestAction(match) {
+  const action = latestVisibleAction(match);
+
+  if (!action) {
+    state.soundActionPrimed = true;
+    state.lastSoundActionKey = null;
+    return;
+  }
+
+  const actionKey = [
+    match?.game?.number ?? match?.currentGameNumber ?? "",
+    action.type,
+    action.playerId,
+    action.at,
+    action.move?.tileId,
+    action.effect ?? ""
+  ].join(":");
+
+  if (!state.soundActionPrimed) {
+    state.soundActionPrimed = true;
+    state.lastSoundActionKey = actionKey;
+    return;
+  }
+
+  if (state.lastSoundActionKey === actionKey) {
+    return;
+  }
+
+  state.lastSoundActionKey = actionKey;
+
+  if (!state.soundEnabled) {
+    return;
+  }
+
+  playTileSound(action.effect);
+}
+
 function renderHand() {
   const game = state.room.match?.game;
-  els.tablePanel.classList.toggle("no-hand", !game);
+  const canSeeHand = Boolean(game && state.playerId && isSeated(state.playerId));
+  els.tablePanel.classList.toggle("no-hand", !canSeeHand);
+  const inputLocked = Boolean(game?.animationLock);
   const myTurn = game?.currentPlayerId === state.playerId
     && state.room.match.status === "active"
-    && state.room.status !== "cancelled";
-  const hand = game?.hand ?? [];
+    && state.room.status !== "cancelled"
+    && !inputLocked;
+  const hand = canSeeHand ? game.hand ?? [] : [];
   const hasPlayableTile = hand.some((tile) => playableEnds(tile, game).length > 0);
   const seedUsed = Boolean(game?.seedToBoardUsedByPlayerId?.[state.playerId]);
+  const slamUsed = Boolean(game?.slamUsedByPlayerId?.[state.playerId]);
+  const takeDatUsed = Boolean(game?.takeDatUsedByPlayerId?.[state.playerId]);
+  const selectedTile = currentSelectedTile(game);
+  const selectedEnds = selectedTile ? playableEnds(selectedTile, game) : [];
+  const canUseTakeDat = Boolean(game)
+    && state.room.match.status === "active"
+    && state.room.status !== "cancelled"
+    && state.room.match.playerOrder.includes(state.playerId)
+    && !inputLocked;
+  const canSendReaction = Boolean(game)
+    && state.room.match.status === "active"
+    && state.room.status !== "cancelled"
+    && isSeated(state.playerId)
+    && !inputLocked;
 
   els.passButton.disabled = !myTurn || hasPlayableTile;
   els.seedBoardButton.disabled = !myTurn || seedUsed;
   els.seedBoardButton.textContent = seedUsed ? "Seed Used" : "Seed to Board";
+  els.slamButton.disabled = !myTurn || !selectedTile || selectedEnds.length === 0 || slamUsed;
+  els.slamButton.textContent = slamUsed ? "Slam Used" : state.slamArmed ? "Pick End" : "Slam";
+  els.takeDatButton.disabled = !canUseTakeDat || takeDatUsed;
+  els.takeDatButton.textContent = takeDatUsed ? "DAT Used" : "Take DAT";
+  els.reactionSelect.disabled = !canSendReaction;
+  els.reactionButton.disabled = !canSendReaction;
+  els.soundToggle.checked = state.soundEnabled;
 
   if (state.selectedTile && !hand.some((tile) => tile.id === state.selectedTile.id)) {
     state.selectedTile = null;
+    state.slamArmed = false;
   }
 
-  if (!game) {
+  if (!canSeeHand) {
     els.hand.innerHTML = "";
     return;
   }
@@ -1172,18 +1581,21 @@ function renderChat() {
   const mutedUntil = Number(state.room.match?.chatMutedUntilByPlayerId?.[state.playerId] ?? 0);
   const muted = mutedUntil > Date.now();
   const hostCanModerate = Boolean(state.room.match && state.playerId === state.room.hostPlayerId);
+  const canChat = Boolean(state.playerId && isSeated(state.playerId) && state.room.match);
 
-  els.chatInput.disabled = state.room.status === "cancelled" || muted;
+  els.chatInput.disabled = !canChat || state.room.status === "cancelled" || muted;
   els.chatInput.placeholder = muted
     ? `Chat blocked for ${Math.ceil((mutedUntil - Date.now()) / 60000)}m`
-    : "";
-  els.chatForm.querySelector("button").disabled = state.room.status === "cancelled" || muted;
+    : canChat
+      ? "No links or obscenities"
+      : "Join the championship lobby to chat";
+  els.chatForm.querySelector("button").disabled = !canChat || state.room.status === "cancelled" || muted;
   els.chatLog.innerHTML = messages.map((message) => `
     <div class="chat-message">
       <div class="chat-message-head">
         <div class="chat-name">${escapeHtml(playerName(message.playerId))}</div>
         <div class="chat-actions">
-          ${message.playerId !== state.playerId ? `<button class="plain-action chat-report-button" type="button" data-message-id="${escapeHtml(message.id)}" data-player-id="${escapeHtml(message.playerId)}">Report</button>` : ""}
+          ${canChat && message.playerId !== state.playerId ? `<button class="plain-action chat-report-button" type="button" data-message-id="${escapeHtml(message.id)}" data-player-id="${escapeHtml(message.playerId)}">Report</button>` : ""}
           ${hostCanModerate ? `
             <button class="plain-action chat-delete-button" type="button" data-message-id="${escapeHtml(message.id)}">Delete</button>
             ${message.playerId !== state.room.hostPlayerId ? `<button class="plain-action chat-block-button" type="button" data-player-id="${escapeHtml(message.playerId)}">Mute ${CHAT_BLOCK_MINUTES}m</button>` : ""}
@@ -1364,6 +1776,46 @@ function renderPortalNotice() {
   }
 }
 
+function renderPortalSummary() {
+  if (!els.portalCapacitySummary || !els.publicChampionshipList) {
+    return;
+  }
+
+  const capacity = state.portalStatus?.capacity;
+  const max = capacity?.maxConcurrentChampionships ?? state.portalStatus?.portalSettings?.maxConcurrentChampionships ?? 30;
+  const active = capacity?.activeChampionships ?? 0;
+  const online = capacity?.onlinePlayers ?? 0;
+  const open = capacity?.openChampionships ?? state.portalStatus?.openChampionships ?? 0;
+
+  els.portalCapacitySummary.innerHTML = `
+    <span>Portal capacity</span>
+    <strong>${active} of ${max} championships in progress</strong>
+    <small>${open} open | ${online} players online</small>
+  `;
+
+  const rooms = state.portalStatus?.viewableChampionships ?? [];
+  els.publicChampionshipList.innerHTML = rooms.length
+    ? rooms.map((room) => `
+      <article class="public-championship-row">
+        <div>
+          <strong>Room ${escapeHtml(room.id)}</strong>
+          <span>Host ${escapeHtml(room.hostName)} | Round ${room.currentGameNumber ?? 1} | ${room.players} joined</span>
+        </div>
+        <button class="small-button watch-championship-button" type="button" data-room-id="${escapeHtml(room.id)}">View</button>
+      </article>
+    `).join("")
+    : `<div class="score-meta">No live championships are in progress.</div>`;
+
+  els.publicChampionshipList.querySelectorAll(".watch-championship-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.roomId = button.dataset.roomId;
+      state.playerId = storedPlayerId(state.roomId);
+      history.pushState(null, "", `/rooms/${state.roomId}`);
+      loadRoom(state.roomId);
+    });
+  });
+}
+
 function renderAdminPortal() {
   if (!els.adminPortal) {
     return;
@@ -1529,12 +1981,16 @@ function renderAdminAudit() {
   const actions = state.portalData?.auditLog ?? [];
 
   els.adminAuditList.innerHTML = actions.length
-    ? actions.map((action) => `
-      <div class="admin-list-row">
-        <strong>${escapeHtml(action.type)}</strong>
-        <span>${escapeHtml(action.summary)} | ${formatDateTime(action.at)}</span>
-      </div>
-    `).join("")
+    ? actions.map((action) => {
+      const actor = action.adminName || action.adminEmail || action.adminRole || "Admin";
+
+      return `
+        <div class="admin-list-row">
+          <strong>${escapeHtml(action.type)}</strong>
+          <span>${escapeHtml(actor)} | ${escapeHtml(action.summary)} | ${formatDateTime(action.at)}</span>
+        </div>
+      `;
+    }).join("")
     : `<div class="admin-empty">No admin actions yet.</div>`;
 }
 
@@ -1709,9 +2165,96 @@ function renderEndedSessionControls() {
   return `
     <div class="empty-board session-ended-panel">
       <strong>Session ended</strong>
+      <p>${escapeHtml(roomCancelMessage(state.room))}</p>
       ${isHost ? `<button class="new-session-button" id="newSessionButton" type="button">New Session</button>` : ""}
     </div>
   `;
+}
+
+function roomCancelMessage(room) {
+  if (room?.cancelMessage) {
+    return room.cancelMessage;
+  }
+
+  const labels = {
+    hostEndedSession: "The host ended this table.",
+    waitingRoomInactivity: "Championship cancelled due to inactivity. Please ensure all 4 players are ready before starting a new championship.",
+    adminShutdown: "The portal admin ended this championship.",
+    adminRemovedPlayer: "A player was removed and the championship was cancelled."
+  };
+
+  return labels[room?.cancelReason] ?? "This championship was cancelled.";
+}
+
+function renderFullscreenButton() {
+  if (!els.boardFullscreenButton) {
+    return;
+  }
+
+  const canUse = Boolean(state.room?.match?.game);
+  els.boardFullscreenButton.classList.toggle("hidden", !canUse);
+  els.boardFullscreenButton.textContent = state.boardFullscreen ? "\u00d7" : "\u26f6";
+  els.boardFullscreenButton.title = state.boardFullscreen ? "Exit full screen board" : "Full screen board";
+  els.boardFullscreenButton.setAttribute("aria-label", els.boardFullscreenButton.title);
+}
+
+async function toggleBoardFullscreen() {
+  if (state.boardFullscreen) {
+    await exitBoardFullscreen();
+    return;
+  }
+
+  await enterBoardFullscreen();
+}
+
+async function enterBoardFullscreen() {
+  state.boardFullscreen = true;
+  document.body.classList.add("board-fullscreen-active");
+  renderFullscreenButton();
+
+  try {
+    if (els.tablePanel.requestFullscreen && !document.fullscreenElement) {
+      await els.tablePanel.requestFullscreen();
+    }
+  } catch {
+    // CSS fallback still rotates the table panel when fullscreen is unavailable.
+  }
+
+  try {
+    await screen.orientation?.lock?.("landscape");
+  } catch {
+    // Some mobile browsers only allow orientation lock in installed PWA/fullscreen mode.
+  }
+
+  window.setTimeout(() => {
+    if (state.room?.match?.game) {
+      renderTable();
+    }
+  }, 150);
+}
+
+async function exitBoardFullscreen() {
+  state.boardFullscreen = false;
+  document.body.classList.remove("board-fullscreen-active");
+
+  try {
+    screen.orientation?.unlock?.();
+  } catch {
+    // Orientation unlock is not supported on every browser.
+  }
+
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    }
+  } catch {
+    // Exiting CSS fallback mode is enough if the browser fullscreen call fails.
+  }
+
+  renderFullscreenButton();
+  if (state.room?.match?.game) {
+    renderTable();
+  }
 }
 
 function renderNewMatchControls() {
@@ -1845,6 +2388,11 @@ function bindBetweenGameControls() {
 
 async function onTileClick(tile) {
   const game = state.room.match?.game;
+
+  if (game?.animationLock) {
+    return;
+  }
+
   const ends = playableEnds(tile, game);
 
   if (ends.length === 0) {
@@ -1852,12 +2400,19 @@ async function onTileClick(tile) {
   }
 
   state.selectedTile = state.selectedTile?.id === tile.id ? null : tile;
+  state.slamArmed = false;
   renderTable();
   renderHand();
 }
 
 function onTileDragStart(event, tile) {
   const game = state.room.match?.game;
+
+  if (game?.animationLock) {
+    event.preventDefault();
+    return;
+  }
+
   const ends = playableEnds(tile, game);
 
   if (ends.length === 0) {
@@ -1877,7 +2432,17 @@ async function playSelectedTile(end) {
     return;
   }
 
-  await playTile(state.selectedTile, end);
+  const tile = state.selectedTile;
+  const useSlam = state.slamArmed;
+
+  state.slamArmed = false;
+
+  if (useSlam) {
+    await slamTile(tile, end);
+    return;
+  }
+
+  await playTile(tile, end);
 }
 
 async function playTile(tile, end) {
@@ -1895,6 +2460,67 @@ async function playTile(tile, end) {
   render();
 }
 
+async function handleSlamClick() {
+  const game = state.room.match?.game;
+  const tile = currentSelectedTile(game);
+  const ends = tile ? playableEnds(tile, game) : [];
+
+  if (!tile || ends.length === 0 || game?.animationLock) {
+    return;
+  }
+
+  if (ends.length === 1) {
+    await slamTile(tile, ends[0]);
+    return;
+  }
+
+  state.slamArmed = true;
+  showToast("Choose the board end for Slam");
+  renderTable();
+  renderHand();
+}
+
+async function slamTile(tile, end) {
+  const result = await api(`/api/rooms/${state.roomId}/slam`, {
+    method: "POST",
+    body: {
+      playerId: state.playerId,
+      tileId: tile.id,
+      end
+    }
+  });
+
+  state.selectedTile = null;
+  state.slamArmed = false;
+  state.room = result.room;
+  render();
+}
+
+async function useTakeDat() {
+  const result = await api(`/api/rooms/${state.roomId}/take-dat`, {
+    method: "POST",
+    body: {
+      playerId: state.playerId
+    }
+  });
+
+  state.room = result.room;
+  render();
+}
+
+async function sendReaction() {
+  const result = await api(`/api/rooms/${state.roomId}/reaction`, {
+    method: "POST",
+    body: {
+      playerId: state.playerId,
+      type: els.reactionSelect.value
+    }
+  });
+
+  state.room = result.room;
+  render();
+}
+
 function updateTimer() {
   clearTimer();
 
@@ -1907,7 +2533,7 @@ function updateTimer() {
       : match?.status === "active" && match.finalReview
         ? match.finalReview.deadlineAt
         : match?.status === "active" && game
-          ? game.turnDeadlineAt
+          ? game.animationLock?.expiresAt ?? game.turnDeadlineAt
           : null;
 
   if (!targetAt) {
@@ -2648,7 +3274,7 @@ function registerServiceWorker() {
     return;
   }
 
-    navigator.serviceWorker.register("/sw.js?v=45").catch(() => {});
+    navigator.serviceWorker.register("/sw.js?v=53").catch(() => {});
 }
 
 function showToast(message) {

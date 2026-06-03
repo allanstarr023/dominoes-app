@@ -26,6 +26,10 @@ export const TURN_DURATION_MS = 30_000;
 export const BETWEEN_GAMES_DURATION_MS = 60_000;
 export const FINAL_REVIEW_DURATION_MS = 20_000;
 export const BATHROOM_BREAK_DURATION_MS = 120_000;
+export const SLAM_DURATION_MS = 5_000;
+export const TAKE_DAT_DURATION_MS = 5_000;
+export const REACTION_DURATION_MS = 7_000;
+export const REACTION_TYPES = Object.freeze(["laughing", "angry", "serious", "sick", "confused"]);
 export const ACTIVE_PLAYERS_PER_GAME = 4;
 export const MAX_MATCH_PLAYERS = 7;
 export const DEFAULT_MATCH_SETTINGS = Object.freeze({
@@ -86,6 +90,7 @@ export function startMatch(options) {
     infractionsPerPenalty: matchSettings.infractionsPerPenalty,
     penaltyPoints: matchSettings.penaltyPoints,
     bathroomBreaksByPlayerId: Object.fromEntries(rosterOrder.map((playerId) => [playerId, false])),
+    reactionsByPlayerId: Object.fromEntries(rosterOrder.map((playerId) => [playerId, null])),
     lastRotation: null,
     finalScores: null,
     winnerIds: []
@@ -144,6 +149,10 @@ export function addPlayerToMatch(match, player, options = {}) {
     bathroomBreaksByPlayerId: {
       ...(match.bathroomBreaksByPlayerId ?? {}),
       [normalized.id]: false
+    },
+    reactionsByPlayerId: {
+      ...(match.reactionsByPlayerId ?? {}),
+      [normalized.id]: null
     }
   };
 }
@@ -160,6 +169,7 @@ export function removePlayerFromMatch(match, playerId) {
   const { [playerId]: removedInfraction, ...infractions } = match.infractions;
   const { [playerId]: removedMute, ...chatMutedUntilByPlayerId } = match.chatMutedUntilByPlayerId ?? {};
   const { [playerId]: removedBreak, ...bathroomBreaksByPlayerId } = match.bathroomBreaksByPlayerId ?? {};
+  const { [playerId]: removedReaction, ...reactionsByPlayerId } = match.reactionsByPlayerId ?? {};
 
   return {
     ...match,
@@ -169,14 +179,15 @@ export function removePlayerFromMatch(match, playerId) {
     rawScores,
     infractions,
     chatMutedUntilByPlayerId,
-    bathroomBreaksByPlayerId
+    bathroomBreaksByPlayerId,
+    reactionsByPlayerId
   };
 }
 
 export function playTile(match, playerId, requestedMove, options = {}) {
   const { now = Date.now(), rng = Math.random, nextGameHands = null } = options;
 
-  assertActiveTurn(match, playerId);
+  assertActiveTurn(match, playerId, now);
   const move = normalizeRequestedMove(match, requestedMove);
 
   if (match.game.requiredOpeningTileId && move.tileId !== match.game.requiredOpeningTileId) {
@@ -186,10 +197,114 @@ export function playTile(match, playerId, requestedMove, options = {}) {
   return applyPlayableMove(match, playerId, move, { now, rng, nextGameHands });
 }
 
+export function slamTile(match, playerId, requestedMove, options = {}) {
+  const {
+    now = Date.now(),
+    rng = Math.random,
+    nextGameHands = null,
+    durationMs = SLAM_DURATION_MS
+  } = options;
+
+  assertActiveTurn(match, playerId, now);
+
+  if (match.game.slamUsedByPlayerId?.[playerId]) {
+    throw new Error("This player has already used Slam in this round.");
+  }
+
+  const move = normalizeRequestedMove(match, requestedMove);
+
+  if (match.game.requiredOpeningTileId && move.tileId !== match.game.requiredOpeningTileId) {
+    throw new Error(`Opening move must be ${match.game.requiredOpeningTileId}.`);
+  }
+
+  const withSlamUsed = {
+    ...match,
+    game: {
+      ...match.game,
+      slamUsedByPlayerId: {
+        ...(match.game.slamUsedByPlayerId ?? {}),
+        [playerId]: true
+      }
+    }
+  };
+
+  return applyPlayableMove(withSlamUsed, playerId, move, {
+    now,
+    rng,
+    nextGameHands,
+    deferTurn: true,
+    effect: "slam",
+    animationDurationMs: durationMs
+  });
+}
+
+export function useTakeDat(match, playerId, options = {}) {
+  const {
+    now = Date.now(),
+    durationMs = TAKE_DAT_DURATION_MS
+  } = options;
+
+  assertActiveMatch(match);
+  assertKnownPlayer(match, playerId);
+
+  if (!match.playerOrder.includes(playerId)) {
+    throw new Error("Only active players can use TAKE DAT.");
+  }
+
+  if (match.game.takeDatUsedByPlayerId?.[playerId]) {
+    throw new Error("This player has already used TAKE DAT in this round.");
+  }
+
+  return {
+    ...match,
+    game: {
+      ...match.game,
+      takeDatUsedByPlayerId: {
+        ...(match.game.takeDatUsedByPlayerId ?? {}),
+        [playerId]: true
+      },
+      lastTakeDat: {
+        type: "takeDat",
+        playerId,
+        at: now,
+        expiresAt: now + durationMs,
+        durationMs
+      }
+    }
+  };
+}
+
+export function setPlayerReaction(match, playerId, reactionType, options = {}) {
+  const {
+    now = Date.now(),
+    durationMs = REACTION_DURATION_MS
+  } = options;
+  const normalizedType = String(reactionType ?? "").trim();
+
+  assertActiveMatch(match);
+  assertKnownPlayer(match, playerId);
+
+  if (!REACTION_TYPES.includes(normalizedType)) {
+    throw new Error("Invalid reaction type.");
+  }
+
+  return {
+    ...match,
+    reactionsByPlayerId: {
+      ...(match.reactionsByPlayerId ?? {}),
+      [playerId]: {
+        type: normalizedType,
+        createdAt: now,
+        expiresAt: now + durationMs
+      }
+    }
+  };
+}
+
 export function passTurn(match, playerId, options = {}) {
   const { now = Date.now() } = options;
 
-  assertActiveTurn(match, playerId);
+  assertActiveTurn(match, playerId, now);
 
   if (canPlay(match.game.hands[playerId], match.game.board)) {
     throw new Error("Cannot pass while a legal move is available.");
@@ -208,6 +323,7 @@ export function handleTurnTimeout(match, options = {}) {
   const { now = Date.now(), rng = Math.random, nextGameHands = null } = options;
 
   assertActiveMatch(match);
+  assertNoActiveAnimationLock(match, now);
 
   if (now < match.game.turnDeadlineAt) {
     throw new Error("Cannot handle timeout before the turn deadline.");
@@ -577,7 +693,7 @@ export function blockPlayerChat(match, targetPlayerId, options = {}) {
 export function useSeedToBoard(match, playerId, options = {}) {
   const { now = Date.now() } = options;
 
-  assertActiveTurn(match, playerId);
+  assertActiveTurn(match, playerId, now);
 
   if (match.game.seedToBoardUsedByPlayerId?.[playerId]) {
     throw new Error("This player has already used Seed to Board in this round.");
@@ -614,6 +730,10 @@ export function turnRemainingMs(match, now = Date.now()) {
   }
 
   if (match.game) {
+    if (match.game.animationLock) {
+      return Math.max(0, match.game.animationLock.expiresAt - now);
+    }
+
     return Math.max(0, match.game.turnDeadlineAt - now);
   }
 
@@ -649,7 +769,14 @@ export function currentStandings(match) {
 }
 
 function applyPlayableMove(match, playerId, requestedMove, options) {
-  const { now, rng, nextGameHands } = options;
+  const {
+    now,
+    rng,
+    nextGameHands,
+    deferTurn = false,
+    effect = null,
+    animationDurationMs = SLAM_DURATION_MS
+  } = options;
   const state = {
     board: match.game.board,
     currentPlayerId: playerId,
@@ -657,6 +784,13 @@ function applyPlayableMove(match, playerId, requestedMove, options) {
   };
   const lock = classifyLockAfterMove(state, requestedMove);
   const nextState = applyMoveToState(state, requestedMove);
+  const action = {
+    type: "play",
+    playerId,
+    move: nextState.appliedMove,
+    at: now,
+    effect
+  };
   const nextGame = {
     ...match.game,
     board: nextState.board,
@@ -666,7 +800,8 @@ function applyPlayableMove(match, playerId, requestedMove, options) {
       playerId,
       move: nextState.appliedMove,
       at: now
-    }
+    },
+    lastAction: action
   };
   const withMove = {
     ...match,
@@ -722,13 +857,52 @@ function applyPlayableMove(match, playerId, requestedMove, options) {
     });
   }
 
+  if (deferTurn) {
+    return {
+      ...withMove,
+      game: {
+        ...withMove.game,
+        turnStartedAt: now,
+        turnDeadlineAt: now + animationDurationMs,
+        animationLock: {
+          type: effect ?? "animation",
+          playerId,
+          tileId: nextState.appliedMove.tile.id,
+          end: nextState.appliedMove.end,
+          startedAt: now,
+          expiresAt: now + animationDurationMs,
+          durationMs: animationDurationMs
+        }
+      }
+    };
+  }
+
   return advanceTurn(withMove, now, {
-    lastAction: {
-      type: "play",
-      playerId,
-      move: nextState.appliedMove,
-      at: now
+    lastAction: action
+  });
+}
+
+export function releaseAnimationLock(match, options = {}) {
+  const { now = Date.now() } = options;
+
+  assertActiveMatch(match);
+
+  if (!match.game.animationLock) {
+    return match;
+  }
+
+  if (now < match.game.animationLock.expiresAt) {
+    throw new Error("Animation is still playing.");
+  }
+
+  return advanceTurn({
+    ...match,
+    game: {
+      ...match.game,
+      animationLock: null
     }
+  }, now, {
+    lastAction: match.game.lastAction
   });
 }
 
@@ -909,6 +1083,14 @@ function startGame(match, options) {
       seedToBoardUsedByPlayerId: Object.fromEntries(
         match.playerOrder.map((playerId) => [playerId, false])
       ),
+      slamUsedByPlayerId: Object.fromEntries(
+        match.playerOrder.map((playerId) => [playerId, false])
+      ),
+      takeDatUsedByPlayerId: Object.fromEntries(
+        match.playerOrder.map((playerId) => [playerId, false])
+      ),
+      lastTakeDat: null,
+      animationLock: null,
       lastSeedToBoardReveal: null
     }
   };
@@ -1061,8 +1243,9 @@ function turnDurationSetting(value, fallback) {
   return [25_000, 30_000, 45_000].includes(number) ? number : fallback;
 }
 
-function assertActiveTurn(match, playerId) {
+function assertActiveTurn(match, playerId, now = Date.now()) {
   assertActiveMatch(match);
+  assertNoActiveAnimationLock(match, now);
   assertKnownPlayer(match, playerId);
 
   if (match.game.currentPlayerId !== playerId) {
@@ -1073,6 +1256,14 @@ function assertActiveTurn(match, playerId) {
 function assertActiveMatch(match) {
   if (match.status !== MATCH_STATUS.ACTIVE || !match.game) {
     throw new Error("Match is not active.");
+  }
+}
+
+function assertNoActiveAnimationLock(match, now = Date.now()) {
+  const animationLock = match.game?.animationLock;
+
+  if (animationLock && now < animationLock.expiresAt) {
+    throw new Error("Animation is still playing.");
   }
 }
 

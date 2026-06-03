@@ -7,10 +7,10 @@
     <meta name="theme-color" content="#174d3f">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Dominoes">
-    <link rel="icon" href="/icon.svg?v=45" type="image/svg+xml">
-    <link rel="alternate icon" href="/favicon.ico?v=45" sizes="any">
-    <link rel="manifest" href="/manifest.webmanifest?v=45">
-    <link rel="stylesheet" href="/styles.css?v=45">
+    <link rel="icon" href="/icon.svg?v=53" type="image/svg+xml">
+    <link rel="alternate icon" href="/favicon.ico?v=53" sizes="any">
+    <link rel="manifest" href="/manifest.webmanifest?v=53">
+    <link rel="stylesheet" href="/styles.css?v=53">
   </head>
   <body>
     <div class="app-shell">
@@ -31,9 +31,23 @@
 
       <main class="layout">
         <section class="setup-panel" id="setupPanel">
+          <div class="setup-status-grid">
+            <article class="panel portal-capacity-card" id="portalCapacitySummary">
+              <span>Portal capacity</span>
+              <strong>Loading</strong>
+              <small>Checking live championships</small>
+            </article>
+            <article class="panel public-lobby-panel">
+              <div class="panel-header">
+                <h2>Live Championships</h2>
+                <button class="small-button" id="refreshLobbyButton" type="button">Refresh</button>
+              </div>
+              <div class="public-championship-list" id="publicChampionshipList"></div>
+            </article>
+          </div>
           <div class="setup-grid">
             <form class="panel" id="createRoomForm">
-              <h1>New Table</h1>
+              <h1>New Championship</h1>
               <label>
                 Name
                 <input id="hostNameInput" autocomplete="name" maxlength="40" required>
@@ -50,7 +64,7 @@
                 Player Graphic
                 <select id="hostAvatarInput"></select>
               </label>
-              <button type="submit">Create Room</button>
+              <button type="submit">Create Championship</button>
             </form>
 
             <form class="panel" id="openRoomForm">
@@ -351,7 +365,11 @@
                 <div class="status-label" id="turnLabel">Waiting</div>
                 <div class="status-sub" id="statusSub">Room not started</div>
               </div>
-              <div class="timer" id="turnTimer">30</div>
+              <div class="status-lobby-reactions" id="statusLobbyReactions" aria-live="polite"></div>
+              <div class="table-status-actions">
+                <button class="icon-button board-fullscreen-button" id="boardFullscreenButton" type="button" title="Full screen board" aria-label="Full screen board">&#9974;</button>
+                <div class="timer" id="turnTimer">30</div>
+              </div>
             </div>
 
             <div class="board" id="board"></div>
@@ -363,6 +381,20 @@
                 <div class="hand-actions">
                   <button class="small-button" id="passButton" type="button">Pass</button>
                   <button class="small-button" id="seedBoardButton" type="button">Seed to Board</button>
+                  <button class="small-button" id="slamButton" type="button">Slam</button>
+                  <button class="small-button" id="takeDatButton" type="button">Take DAT</button>
+                  <select class="reaction-select" id="reactionSelect" aria-label="Reaction">
+                    <option value="laughing">Laugh</option>
+                    <option value="angry">Angry</option>
+                    <option value="serious">Serious</option>
+                    <option value="sick">Sick</option>
+                    <option value="confused">Confused</option>
+                  </select>
+                  <button class="small-button" id="reactionButton" type="button">React</button>
+                  <label class="sound-toggle">
+                    <input id="soundToggle" type="checkbox">
+                    <span>Sound</span>
+                  </label>
                   <button class="small-button hidden" id="bathroomBreakButton" type="button">Bath Break</button>
                   <button class="small-button hidden" id="resumeBreakButton" type="button">Resume</button>
                 </div>
@@ -385,6 +417,6 @@
       <div class="toast hidden" id="toast"></div>
     </div>
 
-    <script type="module" src="/app.js?v=45"></script>
+    <script type="module" src="/app.js?v=53"></script>
   </body>
 </html>

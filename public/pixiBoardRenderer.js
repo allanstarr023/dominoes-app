@@ -1,5 +1,5 @@
-import * as PIXI from "./vendor/pixi.min.mjs?v=45";
-import { createBoardLayout } from "./boardLayout.js?v=45";
+import * as PIXI from "./vendor/pixi.min.mjs?v=53";
+import { createBoardLayout } from "./boardLayout.js?v=53";
 
 const instances = new WeakMap();
 const pipColors = {
@@ -70,7 +70,11 @@ export async function renderPixiBoard(container, options) {
     });
   } else {
     for (const tile of layout.plays) {
-      drawDomino(boardLayer, tile);
+      drawDomino(boardLayer, tile, {
+        app,
+        slam: options.slamLock?.type === "slam" && options.slamLock.tileId === tile.id,
+        slamDurationMs: options.slamLock?.durationMs ?? 5000
+      });
     }
 
     drawEndTarget(boardLayer, layout.leftTarget, {
@@ -137,9 +141,19 @@ function computeScale(layout, width, height) {
   return Math.max(0.14, Math.min(1.18, fitScale));
 }
 
-function drawDomino(layer, tile) {
+function drawDomino(layer, tile, options = {}) {
   const group = new PIXI.Container();
   group.position.set(tile.x, tile.y);
+
+  let glow = null;
+
+  if (options.slam) {
+    glow = new PIXI.Graphics();
+    glow.roundRect(-7, -7, tile.width + 14, tile.height + 14, 12)
+      .fill({ color: 0xf26a21, alpha: 0.34 })
+      .stroke({ color: 0xffc247, width: 3, alpha: 0.92 });
+    group.addChild(glow);
+  }
 
   const shadow = new PIXI.Graphics();
   shadow.roundRect(0, 4, tile.width, tile.height, 8)
@@ -169,6 +183,41 @@ function drawDomino(layer, tile) {
   drawPips(group, firstHalf, tile.displayFirst);
   drawPips(group, secondHalf, tile.displaySecond);
   layer.addChild(group);
+
+  if (options.slam && options.app) {
+    pulseDomino(options.app, group, glow, tile, options.slamDurationMs);
+  }
+}
+
+function pulseDomino(app, group, glow, tile, durationMs) {
+  group.pivot.set(tile.width / 2, tile.height / 2);
+  group.position.set(tile.x + tile.width / 2, tile.y + tile.height / 2);
+
+  let elapsedMs = 0;
+  const pulse = (ticker) => {
+    elapsedMs += ticker.deltaMS;
+    const progress = Math.min(1, elapsedMs / durationMs);
+    const wave = Math.sin(progress * Math.PI * 10);
+    const scale = 1 + Math.max(0, wave) * 0.06;
+
+    group.scale.set(scale);
+
+    if (glow) {
+      glow.alpha = 0.58 + Math.max(0, wave) * 0.34;
+    }
+
+    if (progress >= 1) {
+      group.scale.set(1);
+
+      if (glow) {
+        glow.alpha = 0.72;
+      }
+
+      app.ticker.remove(pulse);
+    }
+  };
+
+  app.ticker.add(pulse);
 }
 
 function drawEndTarget(layer, target, options) {

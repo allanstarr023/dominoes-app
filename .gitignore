@@ -12,3 +12,4 @@ server.err.log
 data/
 .DS_Store
 Thumbs.db
+tmp-*.png

@@ -87,14 +87,22 @@ export function createStatsStore(options = {}) {
       return data.settings;
     },
 
-    async updateSettings(input) {
+    async updateSettings(input, options = {}) {
       const data = await load();
       const settings = normalizeSettings(input);
-
-      await save({
+      const nextData = {
         ...data,
         settings
-      });
+      };
+
+      await save(nextData);
+      await appendAdminAction(nextData, {
+        type: "championshipRulesUpdated",
+        ...adminActionActor(options),
+        roomId: options.roomId,
+        summary: "Championship rules updated",
+        at: options.now ?? Date.now()
+      }, save);
 
       return settings;
     },
@@ -152,7 +160,7 @@ export function createStatsStore(options = {}) {
       await save(nextData);
       await appendAdminAction(nextData, {
         type: "portalSettingsUpdated",
-        adminTokenId: options.adminTokenId,
+        ...adminActionActor(options),
         summary: `Capacity set to ${portalSettings.maxConcurrentChampionships}, new championships ${portalSettings.allowNewChampionships ? "enabled" : "disabled"}`,
         at: options.now ?? Date.now()
       }, save);
@@ -200,7 +208,7 @@ export function createStatsStore(options = {}) {
       await save(nextData);
       await appendAdminAction(nextData, {
         type: "adminUserCreated",
-        adminTokenId: options.adminTokenId,
+        ...adminActionActor(options),
         targetName: adminDisplayName(user),
         summary: `Created ${user.role} admin ${adminDisplayName(user)}`,
         at: now
@@ -242,7 +250,7 @@ export function createStatsStore(options = {}) {
       await save(nextData);
       await appendAdminAction(nextData, {
         type: "adminUserStatusUpdated",
-        adminTokenId: options.adminTokenId,
+        ...adminActionActor(options),
         targetName: adminDisplayName(target),
         summary: `${adminDisplayName(target)} set to ${target.status}`,
         at: now
@@ -308,7 +316,7 @@ export function createStatsStore(options = {}) {
       await save(nextData);
       await appendAdminAction(nextData, {
         type: "reportResolved",
-        adminTokenId: input.adminTokenId,
+        ...adminActionActor(input),
         roomId: target.roomId,
         targetPlayerId: target.targetPlayerId,
         summary: `Report ${target.id} marked ${target.status}`,
@@ -345,7 +353,7 @@ export function createStatsStore(options = {}) {
       await save(nextData);
       await appendAdminAction(nextData, {
         type: "shutdownScheduled",
-        adminTokenId: input.adminTokenId,
+        ...adminActionActor(input),
         summary: `${shutdown.mode} shutdown scheduled`,
         at: now
       }, save);
@@ -380,7 +388,7 @@ export function createStatsStore(options = {}) {
       await save(nextData);
       await appendAdminAction(nextData, {
         type: "broadcastSent",
-        adminTokenId: input.adminTokenId,
+        ...adminActionActor(input),
         summary: broadcast.message,
         at: now
       }, save);
@@ -658,11 +666,25 @@ function normalizeAdminAction(input = {}) {
     id: String(input.id ?? ""),
     type: String(input.type ?? "adminAction").slice(0, 80),
     adminTokenId: input.adminTokenId ? String(input.adminTokenId) : null,
+    adminUserId: input.adminUserId ? String(input.adminUserId) : null,
+    adminName: input.adminName ? String(input.adminName).slice(0, 100) : null,
+    adminEmail: input.adminEmail ? canonicalEmail(input.adminEmail) : null,
+    adminRole: input.adminRole ? String(input.adminRole).slice(0, 40) : null,
     roomId: input.roomId ? String(input.roomId) : null,
     targetPlayerId: input.targetPlayerId ? String(input.targetPlayerId) : null,
     targetName: input.targetName ? String(input.targetName).slice(0, 80) : null,
     summary: String(input.summary ?? "").slice(0, 300),
     at: Number(input.at ?? Date.now())
+  };
+}
+
+function adminActionActor(input = {}) {
+  return {
+    adminTokenId: input.adminTokenId,
+    adminUserId: input.adminUserId,
+    adminName: input.adminName,
+    adminEmail: input.adminEmail,
+    adminRole: input.adminRole
   };
 }
 

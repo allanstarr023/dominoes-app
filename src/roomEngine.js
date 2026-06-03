@@ -18,16 +18,36 @@ export const MAX_BOTS_PER_ROOM = 3;
 export const MAX_PLAYERS_PER_ROOM = 7;
 export const ACTIVE_PLAYERS_PER_GAME = 4;
 export const PLAYER_AVATAR_IDS = Object.freeze([
-  "crown",
-  "rocket",
-  "star",
-  "bolt",
-  "shield",
-  "gem",
-  "flame",
-  "moon",
-  "sun",
-  "anchor"
+  "electrician",
+  "plumber",
+  "it-pro",
+  "secretary",
+  "president",
+  "footballer",
+  "basketballer",
+  "cricketer",
+  "tennis-player",
+  "sprinter",
+  "boxer",
+  "chef",
+  "doctor",
+  "nurse",
+  "police",
+  "firefighter",
+  "pilot",
+  "teacher",
+  "mechanic",
+  "carpenter",
+  "farmer",
+  "musician",
+  "artist",
+  "judge",
+  "scientist",
+  "engineer",
+  "driver",
+  "barber",
+  "builder",
+  "champion"
 ]);
 
 export function createRoom(options) {
@@ -147,6 +167,46 @@ export function addBotToRoom(room, options = {}) {
         isBot: true
       }
     ]
+  };
+}
+
+export function removeWaitingRoomPlayer(room, playerId) {
+  assertWaitingRoom(room);
+  assertSeatedPlayer(room, playerId);
+
+  if (room.hostPlayerId === playerId) {
+    throw new Error("The host cannot be removed before the championship starts.");
+  }
+
+  return {
+    ...room,
+    seats: room.seats.filter((seat) => seat.playerId !== playerId)
+  };
+}
+
+export function moveWaitingRoomPlayer(room, playerId, direction) {
+  assertWaitingRoom(room);
+  assertSeatedPlayer(room, playerId);
+
+  const currentIndex = room.seats.findIndex((seat) => seat.playerId === playerId);
+  const offset = direction === "down" ? 1 : direction === "up" ? -1 : 0;
+
+  if (offset === 0) {
+    throw new Error("Move direction must be up or down.");
+  }
+
+  const nextIndex = currentIndex + offset;
+
+  if (nextIndex < 0 || nextIndex >= room.seats.length) {
+    return room;
+  }
+
+  const seats = [...room.seats];
+  [seats[currentIndex], seats[nextIndex]] = [seats[nextIndex], seats[currentIndex]];
+
+  return {
+    ...room,
+    seats
   };
 }
 
@@ -339,13 +399,14 @@ export function removeRoomPlayer(room, playerId, options = {}) {
 }
 
 export function cancelRoom(room, options = {}) {
-  const { now = Date.now(), reason = "cancelled" } = options;
+  const { now = Date.now(), reason = "cancelled", message = null } = options;
 
   return {
     ...room,
     status: ROOM_STATUS.CANCELLED,
     cancelledAt: now,
     cancelReason: reason,
+    cancelMessage: message,
     match: room.match
       ? cancelMatch(room.match, { now, reason })
       : null

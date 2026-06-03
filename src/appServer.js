@@ -14,8 +14,12 @@ import {
   MATCH_STATUS,
   passTurn,
   playTile,
+  releaseAnimationLock,
   requestBathroomBreak,
   resumeBathroomBreak,
+  setPlayerReaction,
+  slamTile,
+  useTakeDat,
   useSeedToBoard
 } from "./matchEngine.js";
 import {
@@ -23,10 +27,13 @@ import {
   cancelRoom,
   disconnectRoomPlayer,
   joinRoom,
+  moveWaitingRoomPlayer,
   reconnectRoomPlayer,
   removeRoomPlayer,
+  removeWaitingRoomPlayer,
   replaceRoomMatch,
   requestRoomRematch,
+  ROOM_STATUS,
   roomInviteUrl,
   startRoomMatch,
   createRoom
@@ -39,12 +46,16 @@ import {
 import {
   DEFAULT_CHAT_BLOCK_MINUTES,
   chatBlockMinutes,
+  containsLink,
   containsOffensiveLanguage
 } from "./chatModeration.js";
 import { createStatsStore } from "./statsStore.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "public");
+const WAITING_ROOM_TIMEOUT_MS = 10 * 60_000;
+const WAITING_ROOM_TIMEOUT_REASON = "waitingRoomInactivity";
+const WAITING_ROOM_TIMEOUT_MESSAGE = "Championship cancelled due to inactivity. Please ensure all 4 players are ready before starting a new championship.";
 
 export function createAppServer(options = {}) {
   const rooms = new Map();
@@ -53,6 +64,7 @@ export function createAppServer(options = {}) {
   const sseClients = new Map();
   const adminSessions = new Map();
   const rng = options.rng ?? Math.random;
+  const waitingRoomTimeoutMs = options.waitingRoomTimeoutMs ?? WAITING_ROOM_TIMEOUT_MS;
   const statsStore = options.statsStore ?? createStatsStore({
     filePath: options.statsFilePath ?? join(__dirname, "..", "data", "app-state.json"),
     adminPassword: options.adminPassword
@@ -73,7 +85,8 @@ export function createAppServer(options = {}) {
           sseClients,
           adminSessions,
           statsStore,
-          rng
+          rng,
+          waitingRoomTimeoutMs
         });
         return;
       }
@@ -222,6 +235,16 @@ async function handleApiRequest(context) {
     return;
   }
 
+  if (action === "remove-player") {
+    await removeWaitingPlayerHandler(context, roomId);
+    return;
+  }
+
+  if (action === "move-player") {
+    await moveWaitingPlayerHandler(context, roomId);
+    return;
+  }
+
   if (action === "start") {
     await startRoomHandler(context, roomId);
     return;
@@ -229,6 +252,21 @@ async function handleApiRequest(context) {
 
   if (action === "play") {
     await playTileHandler(context, roomId);
+    return;
+  }
+
+  if (action === "slam") {
+    await slamTileHandler(context, roomId);
+    return;
+  }
+
+  if (action === "take-dat") {
+    await takeDatHandler(context, roomId);
+    return;
+  }
+
+  if (action === "reaction") {
+    await reactionHandler(context, roomId);
     return;
   }
 
@@ -328,6 +366,7 @@ async function createRoomHandler(context) {
   });
 
   rooms.set(room.id, room);
+  scheduleRoomTimer(context, room);
   sendJson(response, 201, {
     playerId: hostId,
     inviteUrl: roomInviteUrl(room, requestOrigin(requestUrl)),
@@ -351,17 +390,23 @@ async function adminLoginHandler(context) {
     }
 
     const token = createId("admin");
+    const adminName = [adminUser.firstName, adminUser.lastName].filter(Boolean).join(" ") || adminUser.email;
     adminSessions.set(token, {
       scope: "portal",
       adminUserId: adminUser.id,
       role: adminUser.role,
       email: adminUser.email,
+      adminName,
       createdAt: Date.now()
     });
     await statsStore.recordAdminAction({
       type: "adminLogin",
       adminTokenId: token,
-      targetName: `${adminUser.firstName} ${adminUser.lastName}`.trim() || adminUser.email,
+      adminUserId: adminUser.id,
+      adminName,
+      adminEmail: adminUser.email,
+      adminRole: adminUser.role,
+      targetName: adminName,
       summary: `${adminUser.role} admin logged in`,
       at: Date.now()
     });
@@ -387,10 +432,13 @@ async function adminLoginHandler(context) {
   }
 
   const token = createId("admin");
+  const hostName = room.seats.find((seat) => seat.playerId === body.playerId)?.name ?? body.playerId;
   adminSessions.set(token, {
     scope: "settings",
     roomId: room.id,
     playerId: body.playerId,
+    adminName: hostName,
+    adminRole: "host",
     createdAt: Date.now()
   });
   sendJson(response, 200, { token, scope: "settings" });
@@ -419,21 +467,30 @@ async function updateSettingsHandler(context) {
   }
 
   const body = await readJsonBody(request);
-  const settings = await statsStore.updateSettings(body.settings ?? body);
+  const settings = await statsStore.updateSettings(body.settings ?? body, {
+    ...adminAuditFields(session),
+    roomId: room.id,
+    now: Date.now()
+  });
 
   sendJson(response, 200, { settings });
 }
 
 async function portalStatusHandler(context) {
-  const { response, statsStore } = context;
+  const { response, statsStore, rooms } = context;
   const snapshot = await statsStore.getPortalSnapshot(Date.now());
   const latestBroadcast = snapshot.broadcasts.find((broadcast) => Number(broadcast.expiresAt ?? 0) > Date.now()) ?? null;
+  const liveRooms = [...rooms.values()].filter(isLiveAdminRoom);
 
   sendJson(response, 200, {
     activeShutdown: snapshot.activeShutdown,
     latestBroadcast,
     portalSettings: snapshot.portalSettings,
-    openChampionships: openRoomCount(context.rooms)
+    openChampionships: openRoomCount(rooms),
+    capacity: portalCapacitySnapshot(rooms, snapshot.portalSettings),
+    viewableChampionships: liveRooms
+      .filter((room) => room.status === ROOM_STATUS.ACTIVE)
+      .map(serializePublicRoom)
   });
 }
 
@@ -452,10 +509,7 @@ async function adminPortalHandler(context) {
       email: session.email,
       createdAt: session.createdAt
     },
-    capacity: {
-      openChampionships: openRoomCount(rooms),
-      maxConcurrentChampionships: snapshot.portalSettings.maxConcurrentChampionships
-    },
+    capacity: portalCapacitySnapshot(rooms, snapshot.portalSettings),
     metrics: {
       activeChampionships: liveRooms.filter((room) => room.status === "active").length,
       waitingChampionships: liveRooms.filter((room) => room.status === "waiting").length,
@@ -471,7 +525,7 @@ async function updatePortalSettingsHandler(context) {
   const session = requirePortalAdmin(context, ["owner", "manager"]);
   const body = await readJsonBody(request);
   const portalSettings = await statsStore.updatePortalSettings(body.portalSettings ?? body, {
-    adminTokenId: session.token,
+    ...adminAuditFields(session),
     now: Date.now()
   });
 
@@ -485,7 +539,7 @@ async function adminReportActionHandler(context) {
   const report = await statsStore.resolveModerationReport(String(body.reportId ?? ""), {
     status: body.status ?? "reviewed",
     resolution: body.resolution ?? body.status ?? "reviewed",
-    adminTokenId: session.token,
+    ...adminAuditFields(session),
     now: Date.now()
   });
 
@@ -554,7 +608,7 @@ async function adminPlayerActionHandler(context) {
 
   await statsStore.recordAdminAction({
     type: `player${capitalize(action)}`,
-    adminTokenId: session.token,
+    ...adminAuditFields(session),
     roomId: room.id,
     targetPlayerId: body.targetPlayerId,
     targetName: targetSeat.name,
@@ -566,7 +620,7 @@ async function adminPlayerActionHandler(context) {
     await statsStore.resolveModerationReport(String(body.reportId), {
       status: "actioned",
       resolution: action,
-      adminTokenId: session.token,
+      ...adminAuditFields(session),
       now: Date.now()
     }).catch(() => null);
   }
@@ -586,7 +640,7 @@ async function adminShutdownHandler(context) {
     message: body.message,
     startAt: Number(body.startAt),
     endAt: Number(body.endAt),
-    adminTokenId: session.token,
+    ...adminAuditFields(session),
     now: Date.now()
   });
 
@@ -607,7 +661,7 @@ async function adminBroadcastHandler(context) {
     audience: body.audience,
     message: body.message,
     expiresAt: body.expiresAt ?? Date.now() + 60_000,
-    adminTokenId: session.token,
+    ...adminAuditFields(session),
     now: Date.now()
   });
 
@@ -620,7 +674,7 @@ async function adminUserCreateHandler(context) {
   const session = requirePortalAdmin(context, ["owner", "manager"]);
   const body = await readJsonBody(request);
   const adminUser = await statsStore.createAdminUser(body.adminUser ?? body, {
-    adminTokenId: session.token,
+    ...adminAuditFields(session),
     now: Date.now()
   });
 
@@ -632,7 +686,7 @@ async function adminUserStatusHandler(context) {
   const session = requirePortalAdmin(context, ["owner", "manager"]);
   const body = await readJsonBody(request);
   const adminUser = await statsStore.updateAdminUserStatus(String(body.adminUserId ?? ""), body.status, {
-    adminTokenId: session.token,
+    ...adminAuditFields(session),
     now: Date.now()
   });
 
@@ -665,6 +719,7 @@ async function joinRoomHandler(context, roomId) {
   }
 
   rooms.set(roomId, room);
+  scheduleRoomTimer(context, room);
   broadcastRoom(context, room);
   sendJson(response, 200, {
     playerId,
@@ -698,6 +753,60 @@ async function addBotHandler(context, roomId) {
       rng,
       settings: await statsStore.getSettings()
     });
+  }
+
+  rooms.set(roomId, nextRoom);
+  scheduleRoomTimer(context, nextRoom);
+  broadcastRoom(context, nextRoom);
+  sendJson(response, 200, {
+    room: serializeRoom(nextRoom, body.playerId)
+  });
+}
+
+async function removeWaitingPlayerHandler(context, roomId) {
+  const { request, response, rooms } = context;
+  const body = await readJsonBody(request);
+  const room = requireRoom(rooms, roomId);
+
+  if (body.playerId !== room.hostPlayerId) {
+    sendError(response, 403, "Only the host can remove players before Start Match.");
+    return;
+  }
+
+  let nextRoom;
+
+  try {
+    nextRoom = removeWaitingRoomPlayer(room, body.targetPlayerId);
+  } catch (error) {
+    sendError(response, 400, error.message);
+    return;
+  }
+
+  rooms.set(roomId, nextRoom);
+  scheduleRoomTimer(context, nextRoom);
+  broadcastRoom(context, nextRoom);
+  sendJson(response, 200, {
+    room: serializeRoom(nextRoom, body.playerId)
+  });
+}
+
+async function moveWaitingPlayerHandler(context, roomId) {
+  const { request, response, rooms } = context;
+  const body = await readJsonBody(request);
+  const room = requireRoom(rooms, roomId);
+
+  if (body.playerId !== room.hostPlayerId) {
+    sendError(response, 403, "Only the host can reorder players before Start Match.");
+    return;
+  }
+
+  let nextRoom;
+
+  try {
+    nextRoom = moveWaitingRoomPlayer(room, body.targetPlayerId, body.direction);
+  } catch (error) {
+    sendError(response, 400, error.message);
+    return;
   }
 
   rooms.set(roomId, nextRoom);
@@ -754,6 +863,65 @@ async function playTileHandler(context, roomId) {
 
   rooms.set(roomId, nextRoom);
   scheduleRoomTimer(context, nextRoom);
+  broadcastRoom(context, nextRoom);
+  sendJson(response, 200, {
+    room: serializeRoom(nextRoom, body.playerId)
+  });
+}
+
+async function slamTileHandler(context, roomId) {
+  const { request, response, rooms, rng } = context;
+  const body = await readJsonBody(request);
+  const room = requireRoom(rooms, roomId);
+  const match = slamTile(room.match, body.playerId, {
+    tileId: body.tileId,
+    end: body.end
+  }, {
+    now: Date.now(),
+    rng
+  });
+  const nextRoom = replaceRoomMatch(room, match);
+
+  rooms.set(roomId, nextRoom);
+  scheduleRoomTimer(context, nextRoom);
+  broadcastRoom(context, nextRoom);
+  sendJson(response, 200, {
+    room: serializeRoom(nextRoom, body.playerId)
+  });
+}
+
+async function takeDatHandler(context, roomId) {
+  const { request, response, rooms } = context;
+  const body = await readJsonBody(request);
+  const room = requireRoom(rooms, roomId);
+  const match = useTakeDat(room.match, body.playerId, {
+    now: Date.now()
+  });
+  const nextRoom = replaceRoomMatch(room, match);
+
+  rooms.set(roomId, nextRoom);
+  broadcastRoom(context, nextRoom);
+  sendJson(response, 200, {
+    room: serializeRoom(nextRoom, body.playerId)
+  });
+}
+
+async function reactionHandler(context, roomId) {
+  const { request, response, rooms } = context;
+  const body = await readJsonBody(request);
+  const room = requireRoom(rooms, roomId);
+
+  if (!room.seats.some((seat) => seat.playerId === body.playerId)) {
+    sendError(response, 403, "Only joined championship players can send reactions.");
+    return;
+  }
+
+  const match = setPlayerReaction(room.match, body.playerId, body.type, {
+    now: Date.now()
+  });
+  const nextRoom = replaceRoomMatch(room, match);
+
+  rooms.set(roomId, nextRoom);
   broadcastRoom(context, nextRoom);
   sendJson(response, 200, {
     room: serializeRoom(nextRoom, body.playerId)
@@ -833,6 +1001,21 @@ async function chatHandler(context, roomId) {
 
   if (Number(room.match.chatMutedUntilByPlayerId?.[body.playerId] ?? 0) > now) {
     sendError(response, 403, "This player is temporarily blocked from chat.");
+    return;
+  }
+
+  if (containsLink(body.text)) {
+    await statsStore.createModerationReport({
+      source: "system",
+      roomId,
+      roomStatus: room.status,
+      targetPlayerId: body.playerId,
+      targetName: seat.name,
+      messageText: body.text,
+      reason: "Blocked link in chat",
+      now
+    });
+    sendError(response, 400, "Links are not allowed in chat.");
     return;
   }
 
@@ -1152,6 +1335,9 @@ function scheduleRoomTimer(context, room) {
   }
 
   if (!room.match) {
+    if (room.status === ROOM_STATUS.WAITING) {
+      scheduleWaitingRoomTimer(context, room);
+    }
     return;
   }
 
@@ -1175,6 +1361,11 @@ function scheduleRoomTimer(context, room) {
   }
 
   if (!room.match.game) {
+    return;
+  }
+
+  if (room.match.game.animationLock) {
+    scheduleAnimationLockTimer(context, room);
     return;
   }
 
@@ -1206,6 +1397,63 @@ function scheduleRoomTimer(context, room) {
         message: error.message
       });
     }
+  }, delayMs);
+
+  timers.set(room.id, timer);
+}
+
+function scheduleAnimationLockTimer(context, room) {
+  const { rooms, timers } = context;
+  const delayMs = Math.max(0, room.match.game.animationLock.expiresAt - Date.now());
+  const timer = setTimeout(() => {
+    const latestRoom = rooms.get(room.id);
+
+    if (latestRoom?.match?.status !== MATCH_STATUS.ACTIVE || !latestRoom.match.game?.animationLock) {
+      return;
+    }
+
+    try {
+      const match = releaseAnimationLock(latestRoom.match, {
+        now: Date.now()
+      });
+      const nextRoom = replaceRoomMatch(latestRoom, match);
+
+      rooms.set(room.id, nextRoom);
+      scheduleRoomTimer(context, nextRoom);
+      broadcastRoom(context, nextRoom);
+    } catch (error) {
+      broadcastEvent(context, room.id, "error", {
+        message: error.message
+      });
+      scheduleRoomTimer(context, latestRoom);
+    }
+  }, delayMs);
+
+  timers.set(room.id, timer);
+}
+
+function scheduleWaitingRoomTimer(context, room) {
+  const { rooms, timers, sseClients, waitingRoomTimeoutMs } = context;
+  const timeoutAt = Number(room.createdAt ?? Date.now()) + waitingRoomTimeoutMs;
+  const delayMs = Math.max(0, timeoutAt - Date.now());
+  const timer = setTimeout(() => {
+    const latestRoom = rooms.get(room.id);
+
+    timers.delete(room.id);
+
+    if (!latestRoom || latestRoom.status !== ROOM_STATUS.WAITING || latestRoom.match) {
+      return;
+    }
+
+    const cancelledRoom = cancelRoom(latestRoom, {
+      now: Date.now(),
+      reason: WAITING_ROOM_TIMEOUT_REASON,
+      message: WAITING_ROOM_TIMEOUT_MESSAGE
+    });
+
+    rooms.set(room.id, cancelledRoom);
+    broadcastRoom(context, cancelledRoom);
+    closeRoomEventStreams(sseClients, room.id);
   }, delayMs);
 
   timers.set(room.id, timer);
@@ -1472,6 +1720,33 @@ function requirePortalAdmin(context, allowedRoles = []) {
   };
 }
 
+function adminAuditFields(session = {}) {
+  return {
+    adminTokenId: session.token ?? null,
+    adminUserId: session.adminUserId ?? null,
+    adminName: session.adminName ?? session.email ?? session.playerId ?? "Admin",
+    adminEmail: session.email ?? null,
+    adminRole: session.role ?? session.adminRole ?? session.scope ?? "admin"
+  };
+}
+
+function portalCapacitySnapshot(rooms, portalSettings) {
+  const liveRooms = [...rooms.values()].filter(isLiveAdminRoom);
+  const activeRooms = liveRooms.filter((room) => room.status === ROOM_STATUS.ACTIVE);
+  const connectedPlayers = liveRooms.reduce((sum, room) => sum + connectedHumanSeats(room).length, 0);
+  const activePlayersOnline = activeRooms.reduce((sum, room) => sum + connectedHumanSeats(room).length, 0);
+
+  return {
+    openChampionships: liveRooms.length,
+    activeChampionships: activeRooms.length,
+    waitingChampionships: liveRooms.filter((room) => room.status === ROOM_STATUS.WAITING).length,
+    maxConcurrentChampionships: portalSettings.maxConcurrentChampionships,
+    connectedPlayers,
+    onlinePlayers: connectedPlayers,
+    activePlayersOnline
+  };
+}
+
 function schedulePortalShutdown(context, shutdown) {
   const delayMs = Math.max(0, shutdown.startAt - Date.now());
   const timer = setTimeout(() => {
@@ -1534,6 +1809,24 @@ function serializeAdminRoom(room) {
   };
 }
 
+function serializePublicRoom(room) {
+  const activePlayerIds = room.match?.playerOrder ?? [];
+
+  return {
+    id: room.id,
+    status: room.status,
+    hostName: room.seats.find((seat) => seat.playerId === room.hostPlayerId)?.name ?? room.hostPlayerId,
+    matchLength: room.matchLength,
+    players: room.seats.length,
+    connectedPlayers: connectedHumanSeats(room).length,
+    activePlayers: activePlayerIds.length,
+    lobbyPlayers: Math.max(0, room.seats.length - activePlayerIds.length),
+    currentGameNumber: room.match?.currentGameNumber ?? null,
+    canJoin: room.seats.length < 7,
+    startedAt: room.startedAt ?? null
+  };
+}
+
 function isLiveAdminRoom(room) {
   return ["waiting", "active"].includes(room.status);
 }
@@ -1553,6 +1846,7 @@ function serializeRoom(room, viewerPlayerId = null) {
     startedAt: room.startedAt ?? null,
     cancelledAt: room.cancelledAt ?? null,
     cancelReason: room.cancelReason ?? null,
+    cancelMessage: room.cancelMessage ?? null,
     rematchRequest: room.rematchRequest ?? null,
     match: room.match ? serializeMatch(room.match, viewerPlayerId) : null
   };
@@ -1582,6 +1876,7 @@ function serializeMatch(match, viewerPlayerId) {
     betweenGames: match.betweenGames ? serializeBetweenGames(match.betweenGames) : null,
     finalReview: match.finalReview ? serializeFinalReview(match.finalReview) : null,
     bathroomBreaksByPlayerId: match.bathroomBreaksByPlayerId,
+    reactionsByPlayerId: serializeReactions(match.reactionsByPlayerId ?? {}),
     pauseReason: match.pauseReason ?? null,
     pausedAt: match.pausedAt ?? null,
     pausedByPlayerId: match.pausedByPlayerId ?? null,
@@ -1606,6 +1901,18 @@ function serializeMatch(match, viewerPlayerId) {
     cancelledAt: match.cancelledAt ?? null,
     cancelReason: match.cancelReason ?? null
   };
+}
+
+function serializeReactions(reactionsByPlayerId, now = Date.now()) {
+  return Object.fromEntries(
+    Object.entries(reactionsByPlayerId)
+      .filter(([, reaction]) => reaction && Number(reaction.expiresAt ?? 0) > now)
+      .map(([playerId, reaction]) => [playerId, {
+        type: reaction.type,
+        createdAt: reaction.createdAt,
+        expiresAt: reaction.expiresAt
+      }])
+  );
 }
 
 function serializeBetweenGames(betweenGames) {
@@ -1689,6 +1996,28 @@ function serializeGame(game, viewerPlayerId) {
     turnDeadlineAt: game.turnDeadlineAt,
     requiredOpeningTileId: game.requiredOpeningTileId,
     seedToBoardUsedByPlayerId: game.seedToBoardUsedByPlayerId ?? {},
+    slamUsedByPlayerId: game.slamUsedByPlayerId ?? {},
+    takeDatUsedByPlayerId: game.takeDatUsedByPlayerId ?? {},
+    lastTakeDat: game.lastTakeDat
+      ? {
+        type: game.lastTakeDat.type,
+        playerId: game.lastTakeDat.playerId,
+        at: game.lastTakeDat.at,
+        expiresAt: game.lastTakeDat.expiresAt,
+        durationMs: game.lastTakeDat.durationMs
+      }
+      : null,
+    animationLock: game.animationLock
+      ? {
+        type: game.animationLock.type,
+        playerId: game.animationLock.playerId,
+        tileId: game.animationLock.tileId,
+        end: game.animationLock.end,
+        startedAt: game.animationLock.startedAt,
+        expiresAt: game.animationLock.expiresAt,
+        durationMs: game.animationLock.durationMs
+      }
+      : null,
     lastSeedToBoardReveal: game.lastSeedToBoardReveal ?? null,
     lastAction: serializeAction(game.lastAction ?? null),
     lastMove: serializeMoveAction(game.lastMove ?? null),
@@ -1708,6 +2037,7 @@ function serializeAction(action) {
     type: action.type,
     playerId: action.playerId,
     at: action.at,
+    effect: action.effect ?? null,
     move: serializeMove(action.move)
   };
 }

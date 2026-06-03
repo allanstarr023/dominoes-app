@@ -10,7 +10,9 @@ import {
   createRoom,
   disconnectRoomPlayer,
   joinRoom,
+  moveWaitingRoomPlayer,
   reconnectRoomPlayer,
+  removeWaitingRoomPlayer,
   replaceRoomMatch,
   requestRoomRematch,
   roomInviteUrl,
@@ -99,6 +101,60 @@ test("host can fill seats with unique generated bots", () => {
   );
 });
 
+test("waiting room players and bots can be removed before start", () => {
+  let room = createRoom({
+    id: "room-remove-waiting",
+    host: { id: "p1", name: "Host" },
+    matchLength: 5,
+    now: 1000
+  });
+
+  room = joinRoom(room, { id: "p2", name: "Player 2" }, { now: 1100 });
+  room = addBotToRoom(room, { now: 1200 });
+
+  const withoutPlayer = removeWaitingRoomPlayer(room, "p2");
+  assert.deepEqual(withoutPlayer.seats.map((seat) => seat.playerId), ["p1", "bot-001"]);
+
+  const withoutBot = removeWaitingRoomPlayer(withoutPlayer, "bot-001");
+  assert.deepEqual(withoutBot.seats.map((seat) => seat.playerId), ["p1"]);
+
+  assert.throws(
+    () => removeWaitingRoomPlayer(withoutBot, "p1"),
+    /host cannot be removed/i
+  );
+});
+
+test("host can reorder waiting room seats before the first game starts", () => {
+  let room = createRoom({
+    id: "room-move-waiting",
+    host: { id: "p1", name: "Host" },
+    matchLength: 5,
+    now: 1000
+  });
+
+  for (const playerId of ["p2", "p3", "p4", "p5"]) {
+    room = joinRoom(room, { id: playerId, name: `Player ${playerId.slice(1)}` }, { now: 1100 });
+  }
+
+  room = moveWaitingRoomPlayer(room, "p5", "up");
+  room = moveWaitingRoomPlayer(room, "p5", "up");
+
+  assert.deepEqual(room.seats.map((seat) => seat.playerId), ["p1", "p2", "p5", "p3", "p4"]);
+
+  const started = startRoomMatch(room, {
+    now: 2000,
+    hands: {
+      p1: [t(6, 6), t(6, 0)],
+      p2: [t(5, 5)],
+      p5: [t(4, 4)],
+      p3: [t(3, 3)]
+    }
+  });
+
+  assert.deepEqual(started.match.playerOrder, ["p1", "p2", "p5", "p3"]);
+  assert.deepEqual(started.match.benchPlayerIds, ["p4"]);
+});
+
 test("rejects duplicate player names in the same room", () => {
   const room = createRoom({
     id: "room-dup-name",
@@ -116,13 +172,13 @@ test("rejects duplicate player names in the same room", () => {
 test("rejects duplicate player graphics in the same room", () => {
   const room = createRoom({
     id: "room-dup-avatar",
-    host: { id: "p1", name: "Allan", avatarId: "crown" },
+    host: { id: "p1", name: "Allan", avatarId: "electrician" },
     matchLength: 5,
     now: 1000
   });
 
   assert.throws(
-    () => joinRoom(room, { id: "p2", name: "Player 2", avatarId: "crown" }, { now: 1100 }),
+    () => joinRoom(room, { id: "p2", name: "Player 2", avatarId: "electrician" }, { now: 1100 }),
     /graphic is already in use/
   );
 });

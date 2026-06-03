@@ -98,6 +98,32 @@ test("creates an invite room and allows 4 players to start", async () => {
   }
 });
 
+test("waiting championships auto-cancel after the inactivity window", async () => {
+  const { server, baseUrl } = await listenToTestServer({
+    waitingRoomTimeoutMs: 20
+  });
+
+  try {
+    await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-inactive",
+      hostId: "p1",
+      hostName: "Host",
+      matchLength: 5
+    });
+
+    await wait(60);
+
+    const lookup = await getJson(`${baseUrl}/api/rooms/room-inactive`);
+
+    assert.equal(lookup.status, 200);
+    assert.equal(lookup.body.room.status, "cancelled");
+    assert.equal(lookup.body.room.cancelReason, "waitingRoomInactivity");
+    assert.match(lookup.body.room.cancelMessage, /cancelled due to inactivity/);
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
 test("rooms allow 7 joined players while the first 4 start on the board", async () => {
   const { server, baseUrl } = await listenToTestServer();
 
@@ -474,6 +500,67 @@ test("host can add generated bots before starting", async () => {
   }
 });
 
+test("host can remove and reorder waiting players before starting", async () => {
+  const { server, baseUrl } = await listenToTestServer();
+
+  try {
+    await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-roster-manage",
+      hostId: "p1",
+      hostName: "Host",
+      matchLength: 5
+    });
+
+    for (const playerId of ["p2", "p3", "p4", "p5"]) {
+      await postJson(`${baseUrl}/api/rooms/room-roster-manage/join`, {
+        playerId,
+        name: `Player ${playerId.slice(1)}`
+      });
+    }
+
+    const nonHostMove = await postJson(`${baseUrl}/api/rooms/room-roster-manage/move-player`, {
+      playerId: "p2",
+      targetPlayerId: "p5",
+      direction: "up"
+    });
+    assert.equal(nonHostMove.status, 403);
+
+    let moved = await postJson(`${baseUrl}/api/rooms/room-roster-manage/move-player`, {
+      playerId: "p1",
+      targetPlayerId: "p5",
+      direction: "up"
+    });
+    moved = await postJson(`${baseUrl}/api/rooms/room-roster-manage/move-player`, {
+      playerId: "p1",
+      targetPlayerId: "p5",
+      direction: "up"
+    });
+
+    assert.deepEqual(moved.body.room.seats.map((seat) => seat.playerId), ["p1", "p2", "p5", "p3", "p4"]);
+
+    const removed = await postJson(`${baseUrl}/api/rooms/room-roster-manage/remove-player`, {
+      playerId: "p1",
+      targetPlayerId: "p4"
+    });
+    assert.equal(removed.status, 200);
+    assert.deepEqual(removed.body.room.seats.map((seat) => seat.playerId), ["p1", "p2", "p5", "p3"]);
+
+    const removeHost = await postJson(`${baseUrl}/api/rooms/room-roster-manage/remove-player`, {
+      playerId: "p1",
+      targetPlayerId: "p1"
+    });
+    assert.equal(removeHost.status, 400);
+
+    const started = await postJson(`${baseUrl}/api/rooms/room-roster-manage/start`, {
+      playerId: "p1"
+    });
+    assert.equal(started.status, 200);
+    assert.deepEqual(started.body.room.match.playerOrder, ["p1", "p2", "p5", "p3"]);
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
 test("host can delete chat and block players while offensive chat is rejected", async () => {
   const { server, baseUrl } = await listenToTestServer();
 
@@ -512,6 +599,13 @@ test("host can delete chat and block players while offensive chat is rejected", 
       text: "badword"
     });
     assert.equal(blockedLanguage.status, 400);
+
+    const blockedLink = await postJson(`${baseUrl}/api/rooms/room-chat-mod/chat`, {
+      playerId: "p2",
+      text: "join me at example.com"
+    });
+    assert.equal(blockedLink.status, 400);
+    assert.match(blockedLink.body.error, /Links/);
 
     const nonHostDelete = await postJson(`${baseUrl}/api/rooms/room-chat-mod/delete-chat-message`, {
       playerId: "p2",
@@ -693,6 +787,12 @@ test("portal capacity setting limits concurrent championships", async () => {
     assert.equal(updated.status, 200);
     assert.equal(updated.body.portalSettings.maxConcurrentChampionships, 1);
 
+    const auditPortal = await getJson(`${baseUrl}/api/admin/portal`, login.body.token);
+    const settingsAction = auditPortal.body.auditLog.find((action) => action.type === "portalSettingsUpdated");
+
+    assert.equal(settingsAction.adminName, "Portal Admin");
+    assert.equal(settingsAction.adminRole, "owner");
+
     const first = await postJson(`${baseUrl}/api/rooms`, {
       roomId: "room-capacity-one",
       hostId: "p1",
@@ -709,6 +809,46 @@ test("portal capacity setting limits concurrent championships", async () => {
     });
     assert.equal(second.status, 403);
     assert.match(second.body.error, /capacity/);
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
+test("portal status exposes capacity and active championships for the public lobby", async () => {
+  const { server, baseUrl } = await listenToTestServer();
+
+  try {
+    await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-public-waiting",
+      hostId: "w1",
+      hostName: "Waiting Host",
+      matchLength: 2
+    });
+
+    await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-public-active",
+      hostId: "p1",
+      hostName: "Active Host",
+      matchLength: 5
+    });
+    for (const playerId of ["p2", "p3", "p4"]) {
+      await postJson(`${baseUrl}/api/rooms/room-public-active/join`, {
+        playerId,
+        name: `Player ${playerId.slice(1)}`
+      });
+    }
+    await postJson(`${baseUrl}/api/rooms/room-public-active/start`, {
+      playerId: "p1"
+    });
+
+    const status = await getJson(`${baseUrl}/api/portal-status`);
+
+    assert.equal(status.status, 200);
+    assert.equal(status.body.capacity.openChampionships, 2);
+    assert.equal(status.body.capacity.activeChampionships, 1);
+    assert.equal(status.body.capacity.waitingChampionships, 1);
+    assert.equal(status.body.capacity.onlinePlayers, 5);
+    assert.deepEqual(status.body.viewableChampionships.map((room) => room.id), ["room-public-active"]);
   } finally {
     await closeTestServer(server);
   }
@@ -1068,6 +1208,220 @@ test("seed to board can be used once per player per round", async () => {
   }
 });
 
+test("slam endpoint broadcasts animation lock and rejects play during the lock", async () => {
+  const { server, baseUrl } = await listenToTestServer();
+
+  try {
+    await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-slam",
+      hostId: "p1",
+      hostName: "Host",
+      matchLength: 5
+    });
+    await postJson(`${baseUrl}/api/rooms/room-slam/join`, {
+      playerId: "p2",
+      name: "Player 2"
+    });
+    await postJson(`${baseUrl}/api/rooms/room-slam/join`, {
+      playerId: "p3",
+      name: "Player 3"
+    });
+    await postJson(`${baseUrl}/api/rooms/room-slam/join`, {
+      playerId: "p4",
+      name: "Player 4"
+    });
+
+    const started = await postJson(`${baseUrl}/api/rooms/room-slam/start`, {
+      playerId: "p1"
+    });
+    const turnPlayerId = started.body.room.match.game.currentPlayerId;
+
+    const slammed = await postJson(`${baseUrl}/api/rooms/room-slam/slam`, {
+      playerId: turnPlayerId,
+      tileId: "6:6",
+      end: "opening"
+    });
+
+    assert.equal(slammed.status, 200);
+    assert.equal(slammed.body.room.match.game.currentPlayerId, turnPlayerId);
+    assert.equal(slammed.body.room.match.game.animationLock.type, "slam");
+    assert.equal(slammed.body.room.match.game.animationLock.tileId, "6:6");
+    assert.equal(slammed.body.room.match.game.animationLock.playerId, turnPlayerId);
+    assert.equal(typeof slammed.body.room.match.game.animationLock.startedAt, "number");
+    assert.equal(typeof slammed.body.room.match.game.animationLock.expiresAt, "number");
+    assert.equal(slammed.body.room.match.game.slamUsedByPlayerId[turnPlayerId], true);
+    assert.equal(slammed.body.room.match.game.lastAction.effect, "slam");
+
+    const rejectedPlay = await postJson(`${baseUrl}/api/rooms/room-slam/play`, {
+      playerId: turnPlayerId,
+      tileId: slammed.body.room.match.game.hand.find((tile) => tile.id !== "6:6")?.id ?? "6:0",
+      end: "left"
+    });
+
+    assert.equal(rejectedPlay.status, 500);
+    assert.match(rejectedPlay.body.error, /Animation is still playing/);
+
+    const rejectedPass = await postJson(`${baseUrl}/api/rooms/room-slam/pass`, {
+      playerId: turnPlayerId
+    });
+    assert.equal(rejectedPass.status, 500);
+    assert.match(rejectedPass.body.error, /Animation is still playing/);
+
+    const rejectedSeed = await postJson(`${baseUrl}/api/rooms/room-slam/seed-to-board`, {
+      playerId: turnPlayerId
+    });
+    assert.equal(rejectedSeed.status, 500);
+    assert.match(rejectedSeed.body.error, /Animation is still playing/);
+
+    const rejectedSlam = await postJson(`${baseUrl}/api/rooms/room-slam/slam`, {
+      playerId: turnPlayerId,
+      tileId: slammed.body.room.match.game.hand.find((tile) => tile.id !== "6:6")?.id ?? "6:0",
+      end: "left"
+    });
+    assert.equal(rejectedSlam.status, 500);
+    assert.match(rejectedSlam.body.error, /Animation is still playing/);
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
+test("take dat endpoint serializes taunt state for lobby viewers and rejects repeat use", async () => {
+  const { server, baseUrl } = await listenToTestServer();
+
+  try {
+    await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-take-dat",
+      hostId: "p1",
+      hostName: "Host",
+      matchLength: 5
+    });
+
+    for (const playerId of ["p2", "p3", "p4"]) {
+      await postJson(`${baseUrl}/api/rooms/room-take-dat/join`, {
+        playerId,
+        name: `Player ${playerId.slice(1)}`
+      });
+    }
+
+    await postJson(`${baseUrl}/api/rooms/room-take-dat/start`, {
+      playerId: "p1"
+    });
+
+    await postJson(`${baseUrl}/api/rooms/room-take-dat/join`, {
+      playerId: "p5",
+      name: "Lobby Viewer"
+    });
+
+    const used = await postJson(`${baseUrl}/api/rooms/room-take-dat/take-dat`, {
+      playerId: "p3"
+    });
+
+    assert.equal(used.status, 200);
+    assert.equal(used.body.room.match.game.takeDatUsedByPlayerId.p3, true);
+    assert.equal(used.body.room.match.game.lastTakeDat.type, "takeDat");
+    assert.equal(used.body.room.match.game.lastTakeDat.playerId, "p3");
+    assert.ok(used.body.room.match.game.lastTakeDat.expiresAt > used.body.room.match.game.lastTakeDat.at);
+
+    const repeated = await postJson(`${baseUrl}/api/rooms/room-take-dat/take-dat`, {
+      playerId: "p3"
+    });
+
+    assert.equal(repeated.status, 500);
+    assert.match(repeated.body.error, /already used TAKE DAT/);
+
+    const lobbyView = await getJson(`${baseUrl}/api/rooms/room-take-dat?playerId=p5`);
+
+    assert.equal(lobbyView.status, 200);
+    assert.equal(lobbyView.body.room.match.game.lastTakeDat.playerId, "p3");
+    assert.equal(lobbyView.body.room.match.game.takeDatUsedByPlayerId.p3, true);
+    assert.deepEqual(lobbyView.body.room.match.game.hand, []);
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
+test("reaction endpoint validates senders, lobby players, and serialized expiry", async () => {
+  const { server, baseUrl } = await listenToTestServer();
+
+  try {
+    await postJson(`${baseUrl}/api/rooms`, {
+      roomId: "room-reactions",
+      hostId: "p1",
+      hostName: "Host",
+      matchLength: 5
+    });
+
+    for (const playerId of ["p2", "p3", "p4"]) {
+      await postJson(`${baseUrl}/api/rooms/room-reactions/join`, {
+        playerId,
+        name: `Player ${playerId.slice(1)}`
+      });
+    }
+
+    await postJson(`${baseUrl}/api/rooms/room-reactions/start`, {
+      playerId: "p1"
+    });
+    await postJson(`${baseUrl}/api/rooms/room-reactions/join`, {
+      playerId: "p5",
+      name: "Lobby Viewer"
+    });
+
+    const valid = await postJson(`${baseUrl}/api/rooms/room-reactions/reaction`, {
+      playerId: "p2",
+      type: "laughing"
+    });
+
+    assert.equal(valid.status, 200);
+    assert.equal(valid.body.room.match.reactionsByPlayerId.p2.type, "laughing");
+
+    const invalid = await postJson(`${baseUrl}/api/rooms/room-reactions/reaction`, {
+      playerId: "p2",
+      type: "dancing"
+    });
+
+    assert.equal(invalid.status, 500);
+    assert.match(invalid.body.error, /Invalid reaction type/);
+
+    const nonSeated = await postJson(`${baseUrl}/api/rooms/room-reactions/reaction`, {
+      playerId: "ghost",
+      type: "angry"
+    });
+
+    assert.equal(nonSeated.status, 403);
+
+    const lobbyReaction = await postJson(`${baseUrl}/api/rooms/room-reactions/reaction`, {
+      playerId: "p5",
+      type: "confused"
+    });
+
+    assert.equal(lobbyReaction.status, 200);
+    assert.equal(lobbyReaction.body.room.match.reactionsByPlayerId.p5.type, "confused");
+
+    const room = server.rooms.get("room-reactions");
+    server.rooms.set("room-reactions", {
+      ...room,
+      match: {
+        ...room.match,
+        reactionsByPlayerId: {
+          ...room.match.reactionsByPlayerId,
+          p2: {
+            ...room.match.reactionsByPlayerId.p2,
+            expiresAt: Date.now() - 1
+          }
+        }
+      }
+    });
+
+    const expiredView = await getJson(`${baseUrl}/api/rooms/room-reactions?playerId=p1`);
+
+    assert.equal(expiredView.status, 200);
+    assert.equal(expiredView.body.room.match.reactionsByPlayerId.p2, undefined);
+    assert.equal(expiredView.body.room.match.reactionsByPlayerId.p5.type, "confused");
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
 test("stats endpoint returns leaderboard shape", async () => {
   const { server, baseUrl } = await listenToTestServer();
 
@@ -1088,10 +1442,11 @@ test("stats endpoint returns leaderboard shape", async () => {
   }
 });
 
-async function listenToTestServer() {
+async function listenToTestServer(options = {}) {
   const server = createAppServer({
     statsFilePath: join(tmpdir(), `dominoes-test-${Date.now()}-${Math.random()}.json`),
-    adminPassword: "test-admin"
+    adminPassword: "test-admin",
+    ...options
   });
 
   await new Promise((resolve) => {
@@ -1104,6 +1459,12 @@ async function listenToTestServer() {
     server,
     baseUrl: `http://127.0.0.1:${port}`
   };
+}
+
+async function wait(ms) {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function closeTestServer(server) {
