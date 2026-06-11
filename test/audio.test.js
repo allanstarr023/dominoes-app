@@ -64,10 +64,10 @@ test("playTileSound uses tile and slam sources without throwing on blocked playb
   }
 
   assert.equal(playTileSound(null, { storage, AudioCtor: FakeAudio }), true);
-  assert.equal(calls[0].src, "/audio/domino-tile.wav?v=53");
+  assert.equal(calls[0].src, "/audio/domino-tile.wav?v=75");
   assert.equal(calls[0].volume, 0.46);
 
   assert.equal(playTileSound("slam", { storage, AudioCtor: FakeAudio }), true);
-  assert.equal(calls[1].src, "/audio/domino-slam.wav?v=53");
+  assert.equal(calls[1].src, "/audio/domino-slam.wav?v=75");
   assert.equal(calls[1].volume, 0.74);
 });

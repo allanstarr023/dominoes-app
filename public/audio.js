@@ -1,6 +1,6 @@
 const SOUND_PREFERENCE_KEY = "dominoes-sound-enabled";
-const TILE_SOUND_SRC = "/audio/domino-tile.wav?v=53";
-const SLAM_SOUND_SRC = "/audio/domino-slam.wav?v=53";
+const TILE_SOUND_SRC = "/audio/domino-tile.wav?v=75";
+const SLAM_SOUND_SRC = "/audio/domino-slam.wav?v=75";
 
 export function loadAudioPreference(storage = globalThis.localStorage) {
   try {

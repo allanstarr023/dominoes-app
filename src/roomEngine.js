@@ -47,7 +47,19 @@ export const PLAYER_AVATAR_IDS = Object.freeze([
   "driver",
   "barber",
   "builder",
-  "champion"
+  "champion",
+  "security",
+  "lawyer",
+  "army",
+  "gardener",
+  "architect",
+  "joiner",
+  "welder",
+  "politician",
+  "pastor",
+  "swimmer",
+  "runner",
+  "astronaut"
 ]);
 
 export function createRoom(options) {

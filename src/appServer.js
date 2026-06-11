@@ -50,6 +50,18 @@ import {
   containsOffensiveLanguage
 } from "./chatModeration.js";
 import { createStatsStore } from "./statsStore.js";
+import {
+  assignPlayersToStartingTables,
+  calculateOverallLeaderboard,
+  CHAMPIONSHIP_DAY_STATUS,
+  createChampionshipSession,
+  editRound,
+  endChampionship,
+  rankPlayersPerTableAfterRound,
+  recordRound,
+  validateRoundScoreEntries
+} from "./championshipDayEngine.js";
+import { createChampionshipDayStore } from "./championshipDayStore.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "public");
@@ -63,12 +75,18 @@ export function createAppServer(options = {}) {
   const portalTimers = new Set();
   const sseClients = new Map();
   const adminSessions = new Map();
+  const championshipDaySessions = new Map();
+  let championshipDaySessionsLoaded = false;
   const rng = options.rng ?? Math.random;
   const waitingRoomTimeoutMs = options.waitingRoomTimeoutMs ?? WAITING_ROOM_TIMEOUT_MS;
   const statsStore = options.statsStore ?? createStatsStore({
     filePath: options.statsFilePath ?? join(__dirname, "..", "data", "app-state.json"),
     adminPassword: options.adminPassword
   });
+  const championshipDayStore = options.championshipDayStore ?? createChampionshipDayStore(
+    options.championshipDayFilePath
+      ?? (options.statsFilePath ? `${options.statsFilePath}.championship-day.json` : join(__dirname, "..", "data", "physical-championships.json"))
+  );
 
   const server = createServer(async (request, response) => {
     try {
@@ -84,6 +102,14 @@ export function createAppServer(options = {}) {
           portalTimers,
           sseClients,
           adminSessions,
+        championshipDaySessions,
+        championshipDayStore,
+        get championshipDaySessionsLoaded() {
+          return championshipDaySessionsLoaded;
+        },
+        set championshipDaySessionsLoaded(value) {
+          championshipDaySessionsLoaded = value;
+        },
           statsStore,
           rng,
           waitingRoomTimeoutMs
@@ -191,6 +217,11 @@ async function handleApiRequest(context) {
 
   if (request.method === "PUT" && requestUrl.pathname === "/api/admin/users/status") {
     await adminUserStatusHandler(context);
+    return;
+  }
+
+  if (parts[0] === "api" && parts[1] === "admin" && parts[2] === "championship-day") {
+    await adminChampionshipDayHandler(context, parts.slice(3));
     return;
   }
 
@@ -495,8 +526,9 @@ async function portalStatusHandler(context) {
 }
 
 async function adminPortalHandler(context) {
-  const { response, rooms, statsStore } = context;
+  const { response, rooms, statsStore, championshipDaySessions } = context;
   const session = requirePortalAdmin(context);
+  await ensureChampionshipDaySessionsLoaded(context);
   const snapshot = await statsStore.getPortalSnapshot(Date.now());
   const liveRooms = [...rooms.values()].filter(isLiveAdminRoom);
 
@@ -516,7 +548,8 @@ async function adminPortalHandler(context) {
       connectedPlayers: liveRooms.reduce((sum, room) => sum + connectedHumanSeats(room).length, 0),
       bots: liveRooms.reduce((sum, room) => sum + room.seats.filter((seat) => seat.isBot).length, 0)
     },
-    rooms: liveRooms.map(serializeAdminRoom)
+    rooms: liveRooms.map(serializeAdminRoom),
+    championshipDaySessions: [...championshipDaySessions.values()].map(serializeChampionshipDaySummary)
   });
 }
 
@@ -691,6 +724,330 @@ async function adminUserStatusHandler(context) {
   });
 
   sendJson(response, 200, { adminUser });
+}
+
+async function ensureChampionshipDaySessionsLoaded(context) {
+  if (context.championshipDaySessionsLoaded) {
+    return;
+  }
+
+  await context.championshipDayStore.loadInto(context.championshipDaySessions);
+  context.championshipDaySessionsLoaded = true;
+}
+
+async function persistChampionshipDaySessions(context) {
+  await context.championshipDayStore.saveFrom(context.championshipDaySessions);
+}
+
+async function adminChampionshipDayHandler(context, parts) {
+  const { request, response, championshipDaySessions } = context;
+  const sessionId = parts[0] ?? null;
+  const action = parts[1] ?? null;
+  await ensureChampionshipDaySessionsLoaded(context);
+
+  if (request.method === "GET" && !sessionId) {
+    requirePortalAdmin(context);
+    sendJson(response, 200, {
+      championships: [...championshipDaySessions.values()].map(serializeChampionshipDaySession)
+    });
+    return;
+  }
+
+  if (request.method === "POST" && !sessionId) {
+    const session = requirePortalAdmin(context, ["owner", "manager"]);
+    const body = await readJsonBody(request);
+    let championship;
+
+    try {
+      championship = createChampionshipSession({
+        ...body,
+        id: body.id ?? createId("day")
+      });
+    } catch (error) {
+      sendError(response, 400, error.message);
+      return;
+    }
+
+    championshipDaySessions.set(championship.id, {
+      ...championship,
+      createdByAdmin: adminAuditFields(session),
+      createdAt: Date.now()
+    });
+    await persistChampionshipDaySessions(context);
+    sendJson(response, 201, {
+      championship: serializeChampionshipDaySession(championshipDaySessions.get(championship.id))
+    });
+    return;
+  }
+
+  const championship = championshipDaySessions.get(sessionId);
+
+  if (!championship) {
+    sendError(response, 404, "Championship Day session not found.");
+    return;
+  }
+
+  if (request.method === "GET" && !action) {
+    requirePortalAdmin(context);
+    sendJson(response, 200, {
+      championship: serializeChampionshipDaySession(championship)
+    });
+    return;
+  }
+
+  if (request.method === "GET" && action === "export") {
+    requirePortalAdmin(context);
+    sendJson(response, 200, {
+      exportedAt: new Date().toISOString(),
+      championship: serializeChampionshipDaySession(championship),
+      leaderboard: calculateOverallLeaderboard(championship)
+    });
+    return;
+  }
+
+  if (request.method === "PUT" && action === "players") {
+    const session = requirePortalAdmin(context, ["owner", "manager"]);
+    const body = await readJsonBody(request);
+
+    if (championship.rounds.length > 0) {
+      sendError(response, 400, "Players can only be updated before round scores are entered.");
+      return;
+    }
+
+    let replacement;
+
+    try {
+      replacement = createChampionshipSession({
+        ...championship,
+        players: body.players
+      });
+    } catch (error) {
+      sendError(response, 400, error.message);
+      return;
+    }
+
+    championshipDaySessions.set(sessionId, {
+      ...championship,
+      players: replacement.players,
+      currentTables: replacement.currentTables,
+      updatedByAdmin: adminAuditFields(session),
+      updatedAt: Date.now()
+    });
+    await persistChampionshipDaySessions(context);
+    sendJson(response, 200, {
+      championship: serializeChampionshipDaySession(championshipDaySessions.get(sessionId))
+    });
+    return;
+  }
+
+  if (request.method === "POST" && action === "assign-tables") {
+    const session = requirePortalAdmin(context, ["owner", "manager"]);
+    const body = await readJsonBody(request);
+
+    if (championship.rounds.length > 0) {
+      sendError(response, 400, "Tables can only be assigned before round scores are entered.");
+      return;
+    }
+
+    let currentTables;
+
+    try {
+      currentTables = normalizeManualChampionshipDayTables(championship, body.tables ?? body.currentTables);
+    } catch (error) {
+      sendError(response, 400, error.message);
+      return;
+    }
+
+    championshipDaySessions.set(sessionId, {
+      ...championship,
+      currentTables,
+      updatedByAdmin: adminAuditFields(session),
+      updatedAt: Date.now()
+    });
+    await persistChampionshipDaySessions(context);
+    sendJson(response, 200, {
+      championship: serializeChampionshipDaySession(championshipDaySessions.get(sessionId))
+    });
+    return;
+  }
+
+  if (request.method === "POST" && action === "rounds") {
+    const session = requirePortalAdmin(context, ["owner", "manager"]);
+    const body = await readJsonBody(request);
+
+    if (championship.status !== CHAMPIONSHIP_DAY_STATUS.ACTIVE) {
+      sendError(response, 400, "Completed championships must be reopened before scores can be added.");
+      return;
+    }
+
+    const roundInput = body.round ?? body;
+    const validation = validateRoundScoreEntries(championship, roundInput);
+
+    if (!validation.valid) {
+      sendJson(response, 400, {
+        error: "Round score validation failed.",
+        validation
+      });
+      return;
+    }
+
+    let nextChampionship;
+
+    try {
+      nextChampionship = recordRound(championship, roundInput, body.options ?? {});
+    } catch (error) {
+      if (error.message.includes("Tie breaker pull required")) {
+        const tableResults = rankPlayersPerTableAfterRound(championship, roundInput, body.options ?? {});
+        sendJson(response, 409, {
+          error: "Tie breaker pull required before this round can be finalized.",
+          tieBreaker: {
+            tables: tableResults
+              .filter((table) => table.unresolvedTieGroups.length > 0)
+              .map((table) => ({
+                tableId: table.tableId,
+                tableLabel: table.tableLabel,
+                unresolvedTieGroups: table.unresolvedTieGroups,
+                rankings: table.rankings
+              }))
+          }
+        });
+        return;
+      }
+
+      throw error;
+    }
+
+    championshipDaySessions.set(sessionId, {
+      ...nextChampionship,
+      updatedByAdmin: adminAuditFields(session),
+      updatedAt: Date.now()
+    });
+    await persistChampionshipDaySessions(context);
+    sendJson(response, 200, {
+      championship: serializeChampionshipDaySession(championshipDaySessions.get(sessionId))
+    });
+    return;
+  }
+
+  if (request.method === "PUT" && action === "rounds" && parts[2]) {
+    const session = requirePortalAdmin(context, ["owner", "manager"]);
+    const body = await readJsonBody(request);
+
+    if (championship.status !== CHAMPIONSHIP_DAY_STATUS.ACTIVE) {
+      sendError(response, 400, "Completed championships must be reopened before scores can be edited.");
+      return;
+    }
+
+    const roundNumber = Number(parts[2]);
+    const roundInput = body.round ?? body;
+    let nextChampionship;
+
+    try {
+      nextChampionship = editRound(championship, roundNumber, roundInput, {
+        ...(body.options ?? {}),
+        editedAt: new Date().toISOString(),
+        editedByAdmin: adminAuditFields(session)
+      });
+    } catch (error) {
+      if (error.message.includes("Invalid round score entries")) {
+        sendJson(response, 400, {
+          error: "Round score validation failed.",
+          message: error.message
+        });
+        return;
+      }
+
+      if (error.message.includes("Tie breaker pull required")) {
+        sendJson(response, 409, {
+          error: "Tie breaker pull required before this round can be saved."
+        });
+        return;
+      }
+
+      if (error.message.includes("was not found")) {
+        sendError(response, 404, error.message);
+        return;
+      }
+
+      throw error;
+    }
+
+    const latestEdit = nextChampionship.editHistory.at(-1);
+
+    championshipDaySessions.set(sessionId, {
+      ...nextChampionship,
+      updatedByAdmin: adminAuditFields(session),
+      updatedAt: Date.now()
+    });
+    await persistChampionshipDaySessions(context);
+    sendJson(response, 200, {
+      warning: latestEdit?.changedLaterAssignments
+        ? "Changing this round will recalculate later table assignments and leaderboard."
+        : null,
+      edit: latestEdit ?? null,
+      championship: serializeChampionshipDaySession(championshipDaySessions.get(sessionId))
+    });
+    return;
+  }
+
+  if (request.method === "POST" && action === "end") {
+    const session = requirePortalAdmin(context, ["owner", "manager"]);
+    const body = await readJsonBody(request);
+
+    if (championship.status !== CHAMPIONSHIP_DAY_STATUS.ACTIVE) {
+      sendError(response, 400, "Championship Day session is already completed.");
+      return;
+    }
+
+    if (
+      body.confirmedCompletedRounds !== undefined
+      && Number(body.confirmedCompletedRounds) !== championship.rounds.length
+    ) {
+      sendError(response, 409, `This championship currently has ${championship.rounds.length} completed rounds.`);
+      return;
+    }
+
+    const ended = endChampionship(championship, {
+      endTime: body.endTime
+    });
+
+    championshipDaySessions.set(sessionId, {
+      ...ended,
+      endedByAdmin: adminAuditFields(session),
+      updatedAt: Date.now()
+    });
+    await persistChampionshipDaySessions(context);
+    sendJson(response, 200, {
+      championship: serializeChampionshipDaySession(championshipDaySessions.get(sessionId))
+    });
+    return;
+  }
+
+  if (request.method === "POST" && action === "reopen") {
+    const session = requirePortalAdmin(context, ["owner", "manager"]);
+
+    if (championship.status !== CHAMPIONSHIP_DAY_STATUS.COMPLETED) {
+      sendError(response, 400, "Only completed championships can be reopened.");
+      return;
+    }
+
+    championshipDaySessions.set(sessionId, {
+      ...championship,
+      status: CHAMPIONSHIP_DAY_STATUS.ACTIVE,
+      endTime: null,
+      finalLeaderboard: null,
+      reopenedByAdmin: adminAuditFields(session),
+      reopenedAt: Date.now(),
+      updatedAt: Date.now()
+    });
+    await persistChampionshipDaySessions(context);
+    sendJson(response, 200, {
+      championship: serializeChampionshipDaySession(championshipDaySessions.get(sessionId))
+    });
+    return;
+  }
+
+  sendError(response, 405, "Method not allowed.");
 }
 
 async function joinRoomHandler(context, roomId) {
@@ -1825,6 +2182,111 @@ function serializePublicRoom(room) {
     canJoin: room.seats.length < 7,
     startedAt: room.startedAt ?? null
   };
+}
+
+function serializeChampionshipDaySummary(championship) {
+  const lastRound = championship.rounds.at(-1) ?? null;
+
+  return {
+    id: championship.id,
+    name: championship.name,
+    location: championship.location,
+    status: championship.status,
+    tableCount: championship.tableCount,
+    playerCount: championship.players.length,
+    currentRoundNumber: championship.currentRoundNumber,
+    completedRounds: championship.rounds.length,
+    startTime: championship.startTime,
+    expectedEndTime: championship.expectedEndTime,
+    endTime: championship.endTime,
+    currentTables: championship.currentTables.map((table) => ({
+      id: table.id,
+      label: table.label,
+      playerIds: [...table.playerIds],
+      players: table.playerIds.map((playerId) => ({
+        playerId,
+        playerName: championship.players.find((player) => player.id === playerId)?.name ?? playerId,
+        avatarId: championship.players.find((player) => player.id === playerId)?.avatarId ?? null
+      }))
+    })),
+    lastRoundResults: lastRound ? {
+      number: lastRound.number,
+      completedAt: lastRound.completedAt,
+      tables: lastRound.tableResults.map((table) => ({
+        tableId: table.tableId,
+        tableLabel: table.tableLabel,
+        rankings: table.rankings.map((ranking) => ({
+          playerId: ranking.playerId,
+          playerName: ranking.playerName,
+          avatarId: championship.players.find((player) => player.id === ranking.playerId)?.avatarId ?? null,
+          totalPoints: ranking.totalPoints,
+          place: ranking.place,
+          normalWins: ranking.normalWins,
+          lockWins: ranking.lockWins,
+          secondPlaces: ranking.secondPlaces,
+          thirdPlaces: ranking.thirdPlaces,
+          fourthPlaces: ranking.fourthPlaces,
+          lockLoses: ranking.lockLoses,
+          determinedBy: ranking.determinedBy ?? null,
+          tieBreakerPipTotal: ranking.tieBreakerPipTotal ?? null,
+          tieBreakerTiles: ranking.tieBreakerTiles ?? null
+        }))
+      }))
+    } : null
+  };
+}
+
+function serializeChampionshipDaySession(championship) {
+  return {
+    ...championship,
+    createdByAdmin: championship.createdByAdmin ?? null,
+    updatedByAdmin: championship.updatedByAdmin ?? null,
+    endedByAdmin: championship.endedByAdmin ?? null,
+    reopenedByAdmin: championship.reopenedByAdmin ?? null,
+    reopenedAt: championship.reopenedAt ?? null
+  };
+}
+
+function normalizeManualChampionshipDayTables(championship, tables) {
+  if (!Array.isArray(tables) || tables.length !== championship.tableCount) {
+    throw new Error(`Expected ${championship.tableCount} tables.`);
+  }
+
+  const expectedPlayerIds = new Set(championship.players.map((player) => player.id));
+  const seenPlayerIds = new Set();
+  const defaultTables = assignPlayersToStartingTables(championship.players, championship.tableCount);
+  const normalized = tables.map((table, index) => {
+    const defaultTable = defaultTables[index];
+    const playerIds = (table.playerIds ?? []).map(String);
+
+    if (playerIds.length !== 4) {
+      throw new Error(`${defaultTable.label} must have exactly 4 players.`);
+    }
+
+    for (const playerId of playerIds) {
+      if (!expectedPlayerIds.has(playerId)) {
+        throw new Error(`Unknown player in table assignment: ${playerId}.`);
+      }
+
+      if (seenPlayerIds.has(playerId)) {
+        throw new Error(`Player ${playerId} is assigned more than once.`);
+      }
+
+      seenPlayerIds.add(playerId);
+    }
+
+    return {
+      id: defaultTable.id,
+      label: defaultTable.label,
+      playerIds
+    };
+  });
+
+  if (seenPlayerIds.size !== expectedPlayerIds.size) {
+    throw new Error("Every player must be assigned to one table.");
+  }
+
+  return normalized;
 }
 
 function isLiveAdminRoom(room) {

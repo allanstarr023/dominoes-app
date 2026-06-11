@@ -11,6 +11,7 @@
     "playwright": "^1.59.1"
   },
   "dependencies": {
+    "echarts": "^6.1.0",
     "pixi.js": "^8.18.1"
   }
 }

@@ -981,6 +981,289 @@ test("owner can create admins and inactive admins cannot log in", async () => {
   }
 });
 
+test("championship day scores are only accessible through logged-in admin APIs", async () => {
+  const { server, baseUrl } = await listenToTestServer();
+
+  try {
+    const publicMissing = await getJson(`${baseUrl}/api/championship-day`);
+    assert.equal(publicMissing.status, 404);
+
+    const unauthorizedList = await getJson(`${baseUrl}/api/admin/championship-day`);
+    assert.equal(unauthorizedList.status, 401);
+
+    const unauthorizedCreate = await postJson(`${baseUrl}/api/admin/championship-day`, {
+      tableCount: 2,
+      players: championshipDayPlayers(8)
+    });
+    assert.equal(unauthorizedCreate.status, 401);
+
+    const login = await postJson(`${baseUrl}/api/admin/login`, {
+      password: "test-admin"
+    });
+    assert.equal(login.status, 200);
+
+    const created = await postJson(`${baseUrl}/api/admin/championship-day`, {
+      id: "physical-day-one",
+      name: "Sunday Physical Championship",
+      location: "Club House",
+      tableCount: 2,
+      players: championshipDayPlayers(8),
+      startTime: "2026-06-07T14:00:00.000Z",
+      expectedEndTime: "2026-06-07T19:00:00.000Z"
+    }, login.body.token);
+    assert.equal(created.status, 201);
+    assert.equal(created.body.championship.id, "physical-day-one");
+    assert.equal(created.body.championship.status, "active");
+    assert.equal(created.body.championship.createdByAdmin.adminRole, "owner");
+    assert.equal(created.body.championship.players[0].avatarId, "electrician");
+
+    const duplicateNames = championshipDayPlayers(8);
+    duplicateNames[0].name = "Allan";
+    duplicateNames[1].name = "allan";
+    const duplicateRejected = await postJson(`${baseUrl}/api/admin/championship-day`, {
+      id: "physical-day-duplicate",
+      tableCount: 2,
+      players: duplicateNames,
+      startTime: "2026-06-07T14:00:00.000Z"
+    }, login.body.token);
+    assert.equal(duplicateRejected.status, 400);
+    assert.match(duplicateRejected.body.error, /Player names must be unique/);
+
+    const listed = await getJson(`${baseUrl}/api/admin/championship-day`, login.body.token);
+    assert.equal(listed.status, 200);
+    assert.deepEqual(listed.body.championships.map((championship) => championship.id), ["physical-day-one"]);
+
+    const portal = await getJson(`${baseUrl}/api/admin/portal`, login.body.token);
+    assert.equal(portal.status, 200);
+    assert.deepEqual(portal.body.championshipDaySessions.map((championship) => championship.id), ["physical-day-one"]);
+
+    const invalidRound = championshipDayRound();
+    invalidRound.tables[0].games.pop();
+    const rejectedRound = await postJson(`${baseUrl}/api/admin/championship-day/physical-day-one/rounds`, {
+      round: invalidRound
+    }, login.body.token);
+    assert.equal(rejectedRound.status, 400);
+    assert.equal(rejectedRound.body.error, "Round score validation failed.");
+    assert.equal(rejectedRound.body.validation.valid, false);
+    assert.ok(rejectedRound.body.validation.tables[0].errors.some((error) => error.code === "invalidGameCount"));
+
+    const recorded = await postJson(`${baseUrl}/api/admin/championship-day/physical-day-one/rounds`, {
+      round: championshipDayRound()
+    }, login.body.token);
+    assert.equal(recorded.status, 200);
+    assert.equal(recorded.body.championship.rounds.length, 1);
+    assert.deepEqual(recorded.body.championship.currentTables[0].playerIds, ["p1", "p4", "p7", "p8"]);
+
+    const invalidEdit = championshipDayRound();
+    invalidEdit.tables[0].games[0].scores.find((score) => score.playerId === "p2").points = 5;
+    const rejectedEdit = await putJson(`${baseUrl}/api/admin/championship-day/physical-day-one/rounds/1`, {
+      round: invalidEdit
+    }, login.body.token);
+    assert.equal(rejectedEdit.status, 400);
+    assert.equal(rejectedEdit.body.error, "Round score validation failed.");
+
+    const edited = await putJson(`${baseUrl}/api/admin/championship-day/physical-day-one/rounds/1`, {
+      round: championshipDaySeatOrderRound(recorded.body.championship.rounds[0].startingTables, 1)
+    }, login.body.token);
+    assert.equal(edited.status, 200);
+    assert.equal(edited.body.warning, "Changing this round will recalculate later table assignments and leaderboard.");
+    assert.deepEqual(edited.body.championship.currentTables[0].playerIds, ["p1", "p2", "p7", "p8"]);
+    assert.equal(edited.body.championship.editHistory.length, 1);
+    assert.equal(edited.body.championship.editHistory[0].roundNumber, 1);
+    assert.equal(edited.body.championship.editHistory[0].editedByAdmin.adminRole, "owner");
+    assert.equal(edited.body.championship.editHistory[0].changedLaterAssignments, true);
+
+    const portalAfterRound = await getJson(`${baseUrl}/api/admin/portal`, login.body.token);
+    const daySummary = portalAfterRound.body.championshipDaySessions.find((championship) => championship.id === "physical-day-one");
+    assert.equal(daySummary.lastRoundResults.number, 1);
+    assert.deepEqual(
+      daySummary.lastRoundResults.tables[0].rankings.map((ranking) => [
+        ranking.playerId,
+        ranking.place,
+        ranking.totalPoints,
+        ranking.normalWins,
+        ranking.lockWins,
+        ranking.secondPlaces,
+        ranking.thirdPlaces,
+        ranking.fourthPlaces,
+        ranking.lockLoses
+      ]),
+      [["p1", 1, 25, 5, 0, 0, 0, 0, 0], ["p2", 2, 15, 0, 0, 5, 0, 0, 0], ["p3", 3, 10, 0, 0, 0, 5, 0, 0], ["p4", 4, 5, 0, 0, 0, 0, 5, 0]]
+    );
+
+    const ended = await postJson(`${baseUrl}/api/admin/championship-day/physical-day-one/end`, {
+      endTime: "2026-06-07T19:00:00.000Z"
+    }, login.body.token);
+    assert.equal(ended.status, 200);
+    assert.equal(ended.body.championship.status, "completed");
+    assert.equal(ended.body.championship.finalLeaderboard[0].playerId, "p1");
+    assert.equal(ended.body.championship.finalLeaderboard[0].totalPoints, 25);
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
+test("championship day sessions persist, reconnect, export, and stay open until ended", async () => {
+  const championshipDayFilePath = join(tmpdir(), `dominoes-day-persist-${Date.now()}-${Math.random()}.json`);
+  let server;
+  let baseUrl;
+
+  try {
+    ({ server, baseUrl } = await listenToTestServer({ championshipDayFilePath }));
+    const firstLogin = await postJson(`${baseUrl}/api/admin/login`, {
+      password: "test-admin"
+    });
+    assert.equal(firstLogin.status, 200);
+
+    const created = await postJson(`${baseUrl}/api/admin/championship-day`, {
+      id: "physical-persisted-day",
+      name: "Persisted Physical Championship",
+      location: "Community Hall",
+      tableCount: 2,
+      players: championshipDayPlayers(8),
+      startTime: "2026-06-07T14:00:00.000Z",
+      expectedEndTime: "2026-06-07T19:00:00.000Z"
+    }, firstLogin.body.token);
+    assert.equal(created.status, 201);
+
+    const renamedPlayers = championshipDayPlayers(8).map((player) => ({
+      ...player,
+      name: `${player.name} Updated`
+    }));
+    const updatedPlayers = await putJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/players`, {
+      players: renamedPlayers
+    }, firstLogin.body.token);
+    assert.equal(updatedPlayers.status, 200);
+    assert.equal(updatedPlayers.body.championship.players[0].name, "Player 1 Updated");
+
+    const assigned = await postJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/assign-tables`, {
+      tables: [
+        { playerIds: ["p5", "p6", "p7", "p8"] },
+        { playerIds: ["p1", "p2", "p3", "p4"] }
+      ]
+    }, firstLogin.body.token);
+    assert.equal(assigned.status, 200);
+    assert.deepEqual(assigned.body.championship.currentTables[0].playerIds, ["p5", "p6", "p7", "p8"]);
+
+    const recorded = await postJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/rounds`, {
+      round: championshipDaySeatOrderRound(assigned.body.championship.currentTables, 1)
+    }, firstLogin.body.token);
+    assert.equal(recorded.status, 200);
+    assert.equal(recorded.body.championship.rounds.length, 1);
+
+    const rejectedPlayers = await putJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/players`, {
+      players: championshipDayPlayers(8)
+    }, firstLogin.body.token);
+    assert.equal(rejectedPlayers.status, 400);
+    assert.match(rejectedPlayers.body.error, /before round scores/);
+
+    const rejectedAssign = await postJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/assign-tables`, {
+      tables: assigned.body.championship.currentTables
+    }, firstLogin.body.token);
+    assert.equal(rejectedAssign.status, 400);
+    assert.match(rejectedAssign.body.error, /before round scores/);
+
+    const activeExport = await getJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/export`, firstLogin.body.token);
+    assert.equal(activeExport.status, 200);
+    assert.equal(activeExport.body.championship.status, "active");
+    assert.equal(activeExport.body.leaderboard[0].playerId, "p1");
+
+    await closeTestServer(server);
+
+    ({ server, baseUrl } = await listenToTestServer({ championshipDayFilePath }));
+    const secondLogin = await postJson(`${baseUrl}/api/admin/login`, {
+      password: "test-admin"
+    });
+    assert.equal(secondLogin.status, 200);
+
+    const resumed = await getJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day`, secondLogin.body.token);
+    assert.equal(resumed.status, 200);
+    assert.equal(resumed.body.championship.status, "active");
+    assert.equal(resumed.body.championship.rounds.length, 1);
+    assert.equal(resumed.body.championship.currentRoundNumber, 2);
+    assert.equal(resumed.body.championship.players[0].name, "Player 1 Updated");
+
+    const portal = await getJson(`${baseUrl}/api/admin/portal`, secondLogin.body.token);
+    assert.equal(portal.status, 200);
+    const portalSummary = portal.body.championshipDaySessions.find((championship) => championship.id === "physical-persisted-day");
+    assert.equal(portalSummary.status, "active");
+    assert.equal(portalSummary.startTime, "2026-06-07T14:00:00.000Z");
+    assert.equal(portalSummary.currentRoundNumber, 2);
+    assert.equal(portalSummary.tableCount, 2);
+    assert.equal(portalSummary.playerCount, 8);
+    assert.deepEqual(portalSummary.currentTables[0].players.map((player) => player.playerName), [
+      "Player 5 Updated",
+      "Player 6 Updated",
+      "Player 3 Updated",
+      "Player 4 Updated"
+    ]);
+
+    const ended = await postJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/end`, {
+      endTime: "2026-06-07T19:00:00.000Z",
+      confirmedCompletedRounds: 99
+    }, secondLogin.body.token);
+    assert.equal(ended.status, 409);
+    assert.match(ended.body.error, /currently has 1 completed rounds/);
+
+    const confirmedEnd = await postJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/end`, {
+      endTime: "2026-06-07T19:00:00.000Z",
+      confirmedCompletedRounds: 1
+    }, secondLogin.body.token);
+    assert.equal(confirmedEnd.status, 200);
+    assert.equal(confirmedEnd.body.championship.status, "completed");
+    assert.equal(confirmedEnd.body.championship.finalLeaderboard[0].playerId, "p1");
+
+    const rejectedCompletedRound = await postJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/rounds`, {
+      round: championshipDaySeatOrderRound(confirmedEnd.body.championship.currentTables, 2)
+    }, secondLogin.body.token);
+    assert.equal(rejectedCompletedRound.status, 400);
+    assert.match(rejectedCompletedRound.body.error, /reopened before scores can be added/);
+
+    const rejectedCompletedEdit = await putJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/rounds/1`, {
+      round: championshipDaySeatOrderRound(confirmedEnd.body.championship.rounds[0].startingTables, 1)
+    }, secondLogin.body.token);
+    assert.equal(rejectedCompletedEdit.status, 400);
+    assert.match(rejectedCompletedEdit.body.error, /reopened before scores can be edited/);
+
+    const reopened = await postJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/reopen`, {}, secondLogin.body.token);
+    assert.equal(reopened.status, 200);
+    assert.equal(reopened.body.championship.status, "active");
+    assert.equal(reopened.body.championship.endTime, null);
+    assert.equal(reopened.body.championship.finalLeaderboard, null);
+    assert.equal(reopened.body.championship.reopenedByAdmin.adminRole, "owner");
+
+    const editAfterReopen = await putJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/rounds/1`, {
+      round: championshipDaySeatOrderRound(reopened.body.championship.rounds[0].startingTables, 1)
+    }, secondLogin.body.token);
+    assert.equal(editAfterReopen.status, 200);
+
+    const endedAgain = await postJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day/end`, {
+      endTime: "2026-06-07T19:15:00.000Z",
+      confirmedCompletedRounds: 1
+    }, secondLogin.body.token);
+    assert.equal(endedAgain.status, 200);
+    assert.equal(endedAgain.body.championship.status, "completed");
+
+    await closeTestServer(server);
+
+    ({ server, baseUrl } = await listenToTestServer({ championshipDayFilePath }));
+    const thirdLogin = await postJson(`${baseUrl}/api/admin/login`, {
+      password: "test-admin"
+    });
+    assert.equal(thirdLogin.status, 200);
+
+    const completedPortal = await getJson(`${baseUrl}/api/admin/portal`, thirdLogin.body.token);
+    assert.equal(completedPortal.status, 200);
+    const completed = completedPortal.body.championshipDaySessions.find((championship) => championship.id === "physical-persisted-day");
+    assert.equal(completed.status, "completed");
+    assert.equal(completed.currentRoundNumber, 2);
+  } finally {
+    if (server?.listening) {
+      await closeTestServer(server);
+    }
+  }
+});
+
 test("supports start-now vote override between games", async () => {
   const { server, baseUrl } = await listenToTestServer();
 
@@ -1514,5 +1797,61 @@ async function putJson(url, body, token) {
   return {
     status: response.status,
     body: await response.json()
+  };
+}
+
+function championshipDayPlayers(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `p${index + 1}`,
+    name: `Player ${index + 1}`,
+    avatarId: index === 0 ? "electrician" : `avatar-${index + 1}`
+  }));
+}
+
+function championshipDayTableRound(tableId, playerIds, rows) {
+  return {
+    tableId,
+    games: rows.map((points, index) => ({
+      gameNumber: index + 1,
+      scores: playerIds.map((playerId, playerIndex) => ({
+        playerId,
+        points: points[playerIndex]
+      }))
+    }))
+  };
+}
+
+function championshipDayRound() {
+  return {
+    roundNumber: 1,
+    tables: [
+      championshipDayTableRound("table-a", ["p1", "p2", "p3", "p4"], [
+        [5, 3, 2, 1],
+        [5, 3, 2, 1],
+        [5, 3, 2, 1],
+        [3, 2, 1, 5],
+        [3, 2, 1, 5]
+      ]),
+      championshipDayTableRound("table-b", ["p5", "p6", "p7", "p8"], [
+        [5, 3, 2, 1],
+        [5, 3, 2, 1],
+        [3, 5, 2, 1],
+        [3, 5, 2, 1],
+        [2, 3, 5, 1]
+      ])
+    ]
+  };
+}
+
+function championshipDaySeatOrderRound(tables, roundNumber = 1) {
+  return {
+    roundNumber,
+    tables: tables.map((table) => championshipDayTableRound(table.id, table.playerIds, [
+      [5, 3, 2, 1],
+      [5, 3, 2, 1],
+      [5, 3, 2, 1],
+      [5, 3, 2, 1],
+      [5, 3, 2, 1]
+    ]))
   };
 }

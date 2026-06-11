@@ -7,10 +7,10 @@
     <meta name="theme-color" content="#174d3f">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Dominoes">
-    <link rel="icon" href="/icon.svg?v=53" type="image/svg+xml">
-    <link rel="alternate icon" href="/favicon.ico?v=53" sizes="any">
-    <link rel="manifest" href="/manifest.webmanifest?v=53">
-    <link rel="stylesheet" href="/styles.css?v=53">
+    <link rel="icon" href="/icon.svg?v=75" type="image/svg+xml">
+    <link rel="alternate icon" href="/favicon.ico?v=75" sizes="any">
+    <link rel="manifest" href="/manifest.webmanifest?v=75">
+    <link rel="stylesheet" href="/styles.css?v=75">
   </head>
   <body>
     <div class="app-shell">
@@ -123,6 +123,8 @@
 
               <div class="admin-metrics" id="adminMetrics"></div>
 
+              <section class="championship-day-workspace hidden" id="championshipDayWorkspace"></section>
+
               <details class="panel admin-section" open>
                 <summary class="dock-summary">
                   <span>Moderation Queue</span>
@@ -137,6 +139,55 @@
                   <span class="dock-summary-meta">Live rooms</span>
                 </summary>
                 <div class="admin-list" id="adminRoomsList"></div>
+              </details>
+
+              <details class="panel admin-section">
+                <summary class="dock-summary">
+                  <span>Championship Day Scores</span>
+                  <span class="dock-summary-meta">Physical tables</span>
+                </summary>
+                <form class="admin-form championship-day-form" id="championshipDayCreateForm">
+                  <input id="championshipDayTableCountInput" type="hidden" value="2">
+                  <section class="championship-day-wizard-step" id="championshipDaySetupStep">
+                    <div class="championship-day-wizard-head">
+                      <span>Start Championship</span>
+                      <strong>Choose tables and day details</strong>
+                    </div>
+                    <div class="championship-day-table-options" role="group" aria-label="Championship table count">
+                      <button class="championship-day-table-option active" type="button" data-table-count="2">2 Table Championship</button>
+                      <button class="championship-day-table-option" type="button" data-table-count="3">3 Table Championship</button>
+                      <button class="championship-day-table-option" type="button" data-table-count="4">4 Table Championship</button>
+                    </div>
+                    <label>Name
+                      <input id="championshipDayNameInput" maxlength="80" value="Championship Day" required>
+                    </label>
+                    <label>Physical location
+                      <input id="championshipDayLocationInput" maxlength="120" placeholder="Club House">
+                    </label>
+                    <label>Start time
+                      <input id="championshipDayStartInput" type="datetime-local" required>
+                    </label>
+                    <label>Expected end time
+                      <input id="championshipDayExpectedEndInput" type="datetime-local">
+                    </label>
+                    <div class="admin-actions admin-wide-field">
+                      <button id="championshipDayEnterPlayersButton" type="button">Enter Players</button>
+                    </div>
+                  </section>
+                  <section class="championship-day-wizard-step hidden" id="championshipDayPlayersStep">
+                    <div class="championship-day-wizard-head">
+                      <span>Enter Players</span>
+                      <strong id="championshipDayPlayerCountLabel">8 players required</strong>
+                    </div>
+                    <textarea class="hidden" id="championshipDayPlayersInput" rows="8" aria-hidden="true" tabindex="-1"></textarea>
+                    <div class="championship-day-player-builder admin-wide-field" id="championshipDayPlayersGrid"></div>
+                    <div class="admin-actions admin-wide-field">
+                      <button class="small-button" id="championshipDayBackToSetupButton" type="button">Back</button>
+                      <button type="submit">Assign Tables</button>
+                    </div>
+                  </section>
+                </form>
+                <div class="admin-list" id="championshipDayList"></div>
               </details>
 
               <details class="panel admin-section">
@@ -417,6 +468,6 @@
       <div class="toast hidden" id="toast"></div>
     </div>
 
-    <script type="module" src="/app.js?v=53"></script>
+    <script type="module" src="/app.js?v=75"></script>
   </body>
 </html>
