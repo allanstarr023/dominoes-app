@@ -2,12 +2,12 @@ import {
   loadAudioPreference,
   playTileSound,
   saveAudioPreference
-} from "./audio.js?v=75";
+} from "./audio.js?v=78";
 import {
   disposeChampionshipDayVisuals,
   renderChampionshipDayVisualAnalytics
-} from "./championshipDayCharts.js?v=75";
-import { clearPixiBoard, renderPixiBoard } from "./pixiBoardRenderer.js?v=75";
+} from "./championshipDayCharts.js?v=78";
+import { clearPixiBoard, renderPixiBoard } from "./pixiBoardRenderer.js?v=78";
 
 const state = {
   room: null,
@@ -31,6 +31,7 @@ const state = {
   championshipDayEditingRoundNumber: null,
   championshipDayOpenRoundResults: new Set(),
   championshipDayOpenAdminSessions: new Set(),
+  championshipDayChartPlayerFilter: "",
   portalStatus: null,
   adminView: isAdminPath(),
   portalRefreshInterval: null,
@@ -781,6 +782,7 @@ async function loadPortalData(options = {}) {
     state.championshipDayScoreEntryOpen = false;
     state.championshipDayActiveScoreTableId = null;
     state.championshipDayEditingRoundNumber = null;
+    state.championshipDayChartPlayerFilter = "";
   }
 
   if (!state.portalAdminToken) {
@@ -2068,7 +2070,9 @@ function renderChampionshipDayWorkspace() {
   `;
 
   bindChampionshipDayWorkspace();
-  renderChampionshipDayVisualAnalytics(championship, els.championshipDayWorkspace);
+  renderChampionshipDayVisualAnalytics(championship, els.championshipDayWorkspace, {
+    playerId: state.championshipDayChartPlayerFilter
+  });
 }
 
 function championshipDayStat(label, value) {
@@ -2141,6 +2145,14 @@ function championshipDayFlameHtml(title = "20+ points this round") {
 
 function renderChampionshipDayVisualsPanel(championship) {
   const hasRounds = Number(championship.rounds?.length ?? 0) > 0;
+  const playerIds = new Set((championship.players ?? []).map((player) => String(player.id)));
+  const selectedPlayerId = playerIds.has(state.championshipDayChartPlayerFilter)
+    ? state.championshipDayChartPlayerFilter
+    : "";
+
+  if (state.championshipDayChartPlayerFilter !== selectedPlayerId) {
+    state.championshipDayChartPlayerFilter = selectedPlayerId;
+  }
 
   return `
     <section class="championship-day-panel championship-day-visual-panel" data-championship-day-visuals>
@@ -2149,6 +2161,15 @@ function renderChampionshipDayVisualsPanel(championship) {
         <span>Completed rounds, head-to-head, wins, losses, and scoring bursts</span>
       </div>
       ${hasRounds ? `
+        <div class="championship-day-chart-filter">
+          <label for="championshipDayChartPlayerFilter">Filter charts by player</label>
+          <select id="championshipDayChartPlayerFilter">
+            <option value="">All players</option>
+            ${(championship.players ?? []).map((player) => `
+              <option value="${escapeHtml(player.id)}" ${String(player.id) === selectedPlayerId ? "selected" : ""}>${escapeHtml(player.name)}</option>
+            `).join("")}
+          </select>
+        </div>
         <div class="championship-day-visual-grid">
           ${championshipDayVisualCard("momentum", "Momentum")}
           ${championshipDayVisualCard("wins-losses", "Wins vs Losses")}
@@ -2167,7 +2188,7 @@ function renderChampionshipDayVisualsPanel(championship) {
 
 function championshipDayVisualCard(id, label) {
   return `
-    <article class="championship-day-visual-card">
+    <article class="championship-day-visual-card ${id === "head-to-head" ? "championship-day-head-to-head-card" : ""}">
       <div class="championship-day-visual-title">${escapeHtml(label)}</div>
       <div class="championship-day-echart" data-echart="${escapeHtml(id)}" role="img" aria-label="${escapeHtml(label)} chart"></div>
     </article>
@@ -2650,6 +2671,7 @@ function bindChampionshipDayWorkspace() {
     state.championshipDayScoreEntryOpen = false;
     state.championshipDayActiveScoreTableId = null;
     state.championshipDayEditingRoundNumber = null;
+    state.championshipDayChartPlayerFilter = "";
     history.pushState(null, "", "/admin/");
     renderAdminPortal();
   });
@@ -2669,6 +2691,11 @@ function bindChampionshipDayWorkspace() {
     state.championshipDayEditingRoundNumber = null;
     showToast("Championship Day reopened");
     await loadPortalData();
+  });
+
+  document.querySelector("#championshipDayChartPlayerFilter")?.addEventListener("change", (event) => {
+    state.championshipDayChartPlayerFilter = event.target.value;
+    renderAdminPortal();
   });
 
   document.querySelector("#championshipDayAddRoundButton")?.addEventListener("click", () => {
@@ -5288,7 +5315,7 @@ function registerServiceWorker() {
     return;
   }
 
-    navigator.serviceWorker.register("/sw.js?v=75").catch(() => {});
+    navigator.serviceWorker.register("/sw.js?v=78").catch(() => {});
 }
 
 function showToast(message) {

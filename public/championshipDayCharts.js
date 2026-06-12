@@ -1,4 +1,4 @@
-import * as echarts from "./vendor/echarts.esm.min.mjs?v=75";
+import * as echarts from "./vendor/echarts.esm.min.mjs?v=78";
 
 const chartInstances = new Map();
 let resizeBound = false;
@@ -11,7 +11,7 @@ export function disposeChampionshipDayVisuals() {
   chartInstances.clear();
 }
 
-export function renderChampionshipDayVisualAnalytics(championship, root = document) {
+export function renderChampionshipDayVisualAnalytics(championship, root = document, options = {}) {
   disposeChampionshipDayVisuals();
 
   const host = root.querySelector?.("[data-championship-day-visuals]");
@@ -20,7 +20,7 @@ export function renderChampionshipDayVisualAnalytics(championship, root = docume
     return;
   }
 
-  const data = buildChampionshipDayChartData(championship);
+  const data = buildChampionshipDayChartData(championship, options);
   const chartConfigs = [
     ["momentum", leaderboardMomentumOption(data)],
     ["wins-losses", winsVsLossesOption(data)],
@@ -57,11 +57,15 @@ export function resizeChampionshipDayVisuals() {
   }
 }
 
-export function buildChampionshipDayChartData(championship) {
+export function buildChampionshipDayChartData(championship, options = {}) {
   const players = (championship.players ?? []).map((player) => ({
     id: String(player.id),
     name: String(player.name ?? player.id)
   }));
+  const selectedPlayerId = players.some((player) => player.id === String(options.playerId ?? ""))
+    ? String(options.playerId)
+    : "";
+  const selectedPlayer = players.find((player) => player.id === selectedPlayerId) ?? null;
   const playerNames = Object.fromEntries(players.map((player) => [player.id, player.name]));
   const totals = new Map(players.map((player) => [player.id, emptyPlayerChartStats(player)]));
   const roundLabels = (championship.rounds ?? []).map((round) => `R${round.number}`);
@@ -112,17 +116,66 @@ export function buildChampionshipDayChartData(championship) {
 
   const leaderboard = [...totals.values()]
     .sort((first, second) => second.totalPoints - first.totalPoints || first.name.localeCompare(second.name));
-  const topMomentumPlayers = leaderboard.slice(0, 8);
+  const filteredLeaderboard = selectedPlayer
+    ? leaderboard.filter((player) => player.id === selectedPlayer.id)
+    : leaderboard;
+  const topMomentumPlayers = selectedPlayer
+    ? filteredLeaderboard
+    : leaderboard.slice(0, 8);
+  const filteredRoundBurstRows = selectedPlayer
+    ? roundBurstRows.filter((row) => row.playerId === selectedPlayer.id)
+    : roundBurstRows;
+  const headToHeadRows = selectedPlayer ? [selectedPlayer] : players;
+  const headToHeadColumns = selectedPlayer
+    ? players.filter((player) => player.id !== selectedPlayer.id)
+    : players;
+  const headToHeadCells = buildHeadToHeadCells(headToHead, players, headToHeadRows, headToHeadColumns);
 
   return {
     players,
-    leaderboard,
+    selectedPlayer,
+    leaderboard: filteredLeaderboard,
     topMomentumPlayers,
     roundLabels,
     roundTotalsByPlayer,
-    roundBurstRows,
-    headToHead
+    roundBurstRows: filteredRoundBurstRows,
+    headToHead,
+    headToHeadRows,
+    headToHeadColumns,
+    headToHeadCells
   };
+}
+
+function buildHeadToHeadCells(headToHead, players, rowPlayers, columnPlayers) {
+  const playerIndexes = new Map(players.map((player, index) => [player.id, index]));
+
+  return rowPlayers.map((rowPlayer, rowIndex) => (
+    columnPlayers.map((columnPlayer, colIndex) => {
+      const rowPlayerIndex = playerIndexes.get(rowPlayer.id);
+      const columnPlayerIndex = playerIndexes.get(columnPlayer.id);
+      const rowWins = rowPlayerIndex === undefined || columnPlayerIndex === undefined || rowPlayer.id === columnPlayer.id
+        ? 0
+        : Number(headToHead[rowPlayerIndex]?.[columnPlayerIndex] ?? 0);
+      const columnWins = rowPlayerIndex === undefined || columnPlayerIndex === undefined || rowPlayer.id === columnPlayer.id
+        ? 0
+        : Number(headToHead[columnPlayerIndex]?.[rowPlayerIndex] ?? 0);
+      const total = rowWins + columnWins;
+      const percentage = total > 0 ? (rowWins / total) * 100 : null;
+
+      return {
+        rowPlayerId: rowPlayer.id,
+        columnPlayerId: columnPlayer.id,
+        rowPlayerName: rowPlayer.name,
+        columnPlayerName: columnPlayer.name,
+        rowIndex,
+        colIndex,
+        rowWins,
+        columnWins,
+        total,
+        percentage
+      };
+    })
+  ));
 }
 
 function addHeadToHeadGameCounts(headToHead, players, table) {
@@ -187,9 +240,11 @@ function emptyPlayerChartStats(player) {
 }
 
 function leaderboardMomentumOption(data) {
+  const titleSuffix = data.selectedPlayer ? ` - ${data.selectedPlayer.name}` : "";
+
   return {
     ...baseChartOption(),
-    title: { text: "Leaderboard Momentum", subtext: "Cumulative points after each round", left: 10, top: 8 },
+    title: { text: `Leaderboard Momentum${titleSuffix}`, subtext: "Cumulative points after each round", left: 10, top: 8 },
     tooltip: {
       trigger: "axis",
       renderMode: "richText",
@@ -226,10 +281,11 @@ function leaderboardMomentumOption(data) {
 
 function winsVsLossesOption(data) {
   const players = data.leaderboard.slice(0, 12);
+  const titleSuffix = data.selectedPlayer ? ` - ${data.selectedPlayer.name}` : "";
 
   return {
     ...baseChartOption(),
-    title: { text: "Wins vs Losses", subtext: "Stacked win and loss bars by player", left: 10, top: 8 },
+    title: { text: `Wins vs Losses${titleSuffix}`, subtext: "Stacked win and loss bars by player", left: 10, top: 8 },
     brush: {
       toolbox: ["rect", "polygon", "lineX", "lineY", "keep", "clear"],
       xAxisIndex: 0,
@@ -313,56 +369,111 @@ function winsVsLossesSeries(players) {
   ];
 }
 
-function headToHeadOption(data) {
-  const players = data.players;
-  const heatmap = [];
+export function headToHeadOption(data) {
+  const rowPlayers = data.headToHeadRows;
+  const columnPlayers = data.headToHeadColumns;
+  const heatmap = data.headToHeadCells.flatMap((row) => (
+    row.map((cell) => {
+      const displayPercentage = cell.percentage === null ? null : roundMatchupPercentage(cell.percentage);
 
-  data.headToHead.forEach((row, rowIndex) => {
-    row.forEach((value, colIndex) => {
-      heatmap.push([colIndex, rowIndex, value]);
-    });
-  });
+      return [
+        cell.colIndex,
+        cell.rowIndex,
+        displayPercentage ?? 50,
+        cell.rowWins,
+        cell.columnWins,
+        cell.total,
+        displayPercentage,
+        cell.rowPlayerName,
+        cell.columnPlayerName
+      ];
+    })
+  ));
+  const titleSuffix = data.selectedPlayer ? ` - ${data.selectedPlayer.name}` : "";
+
+  const labelsFit = rowPlayers.length <= 4 && columnPlayers.length <= 8;
 
   return {
     ...baseChartOption(),
-    title: { text: "Head To Head Edge", subtext: "Completed games where row player placed above column player", left: 10, top: 8 },
+    title: { text: `Head To Head Edge${titleSuffix}`, subtext: "Color shows row player's win percentage against column player", left: 10, top: 8 },
     tooltip: {
       position: "top",
       formatter: (params) => {
-        const [colIndex, rowIndex, value] = params.value;
-        if (rowIndex === colIndex) {
-          return `${players[rowIndex].name}<br><strong>Same player</strong>`;
+        const [, , , rowWins, columnWins, total, percentage, rowPlayerName, columnPlayerName] = params.value;
+
+        if (rowPlayerName === columnPlayerName) {
+          return `${rowPlayerName}<br><strong>Same player</strong>`;
         }
 
-        return `${players[rowIndex].name} placed above ${players[colIndex].name}: <strong>${value}</strong>`;
+        if (!total) {
+          return `${rowPlayerName} vs ${columnPlayerName}<br><strong>No completed games together</strong>`;
+        }
+
+        return `${rowPlayerName} placed above ${columnPlayerName}: <strong>${rowWins} of ${total}</strong><br>${rowWins}-${columnWins} | <strong>${percentage}%</strong>`;
       }
     },
-    grid: { left: 90, right: 24, top: 78, bottom: 72 },
-    xAxis: { type: "category", data: players.map((player) => player.name), axisLabel: { rotate: 35, interval: 0 } },
-    yAxis: { type: "category", data: players.map((player) => player.name), inverse: true },
+    grid: { left: data.selectedPlayer ? 88 : 90, right: 24, top: 78, bottom: 112 },
+    xAxis: { type: "category", data: columnPlayers.map((player) => player.name), axisLabel: { rotate: 35, interval: 0 } },
+    yAxis: { type: "category", data: rowPlayers.map((player) => player.name), inverse: true },
     visualMap: {
+      dimension: 2,
       min: 0,
-      max: Math.max(1, ...heatmap.map((entry) => entry[2])),
+      max: 100,
       calculable: true,
       orient: "horizontal",
       left: "center",
-      bottom: 8,
-      inRange: { color: ["#f8f2e7", "#e6ae4a", "#176b54"] }
+      bottom: 14,
+      text: ["Winning %", "Losing %"],
+      formatter: (value) => `${roundMatchupPercentage(value)}%`,
+      inRange: { color: ["#d65742", "#e6ae4a", "#176b54"] }
     },
     series: [{
       name: "Head to head",
       type: "heatmap",
       data: heatmap,
       emphasis: { itemStyle: { shadowBlur: 10, shadowColor: "rgba(0, 0, 0, 0.25)" } },
-      label: { show: true, color: "#1d2b27", fontWeight: 800 }
+      label: {
+        show: true,
+        color: "#1d2b27",
+        fontWeight: 800,
+        fontSize: labelsFit ? 10 : 9,
+        formatter: (params) => {
+          const [, , , rowWins, columnWins, total, percentage, rowPlayerName, columnPlayerName] = params.value;
+
+          if (rowPlayerName === columnPlayerName) {
+            return "";
+          }
+
+          if (!total) {
+            return "-";
+          }
+
+          return labelsFit ? `${rowWins}-${columnWins}\n${percentage}%` : `${percentage}%`;
+        }
+      }
     }]
   };
 }
 
+function roundMatchupPercentage(value) {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+
+  const base = Math.floor(numeric);
+  const decimal = numeric - base;
+
+  return decimal > 0.5 ? base + 1 : base;
+}
+
 function roundScoreBurstsOption(data) {
+  const titleSuffix = data.selectedPlayer ? ` - ${data.selectedPlayer.name}` : "";
+
   return {
     ...baseChartOption(),
-    title: { text: "Round Score Bursts", subtext: "Every completed table result by player", left: 10, top: 8 },
+    title: { text: `Round Score Bursts${titleSuffix}`, subtext: "Every completed table result by player", left: 10, top: 8 },
     tooltip: {
       trigger: "item",
       formatter: (params) => {
