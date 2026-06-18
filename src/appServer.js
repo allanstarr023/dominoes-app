@@ -61,6 +61,7 @@ import {
   recordRound,
   validateRoundScoreEntries
 } from "./championshipDayEngine.js";
+import { buildChampionshipDashboardWorkbook } from "./championshipDayExcel.js";
 import { createChampionshipDayStore } from "./championshipDayStore.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -797,6 +798,19 @@ async function adminChampionshipDayHandler(context, parts) {
 
   if (request.method === "GET" && action === "export") {
     requirePortalAdmin(context);
+
+    if (new URL(request.url, "http://localhost").searchParams.get("format") === "xlsx") {
+      const workbook = buildChampionshipDashboardWorkbook(championship);
+
+      response.writeHead(200, {
+        "Content-Type": workbook.contentType,
+        "Content-Disposition": `attachment; filename="${workbook.filename}"`,
+        "Cache-Control": "no-store"
+      });
+      response.end(workbook.buffer);
+      return;
+    }
+
     sendJson(response, 200, {
       exportedAt: new Date().toISOString(),
       championship: serializeChampionshipDaySession(championship),

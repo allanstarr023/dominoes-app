@@ -1244,6 +1244,22 @@ test("championship day sessions persist, reconnect, export, and stay open until 
     assert.equal(endedAgain.status, 200);
     assert.equal(endedAgain.body.championship.status, "completed");
 
+    const excelExport = await fetch(`${baseUrl}/api/admin/championship-day/physical-persisted-day/export?format=xlsx`, {
+      headers: {
+        Authorization: `Bearer ${secondLogin.body.token}`
+      }
+    });
+    const excelBytes = Buffer.from(await excelExport.arrayBuffer());
+    assert.equal(excelExport.status, 200);
+    assert.equal(
+      excelExport.headers.get("content-type"),
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    assert.match(excelExport.headers.get("content-disposition"), /championship-dashboard-07-06\.26\.xlsx/);
+    assert.equal(excelBytes.subarray(0, 2).toString("utf8"), "PK");
+    assert.match(excelBytes.toString("utf8"), /Player Name/);
+    assert.match(excelBytes.toString("utf8"), /Player 1 Updated/);
+
     await closeTestServer(server);
 
     ({ server, baseUrl } = await listenToTestServer({ championshipDayFilePath }));

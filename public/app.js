@@ -2052,6 +2052,7 @@ function renderChampionshipDayWorkspace() {
         <button class="small-button" id="championshipDayBackButton" type="button">Dashboard</button>
         ${championship.status === "active" ? `<button class="small-button danger-button" id="championshipDayEndButton" type="button">End Championship</button>` : ""}
         ${championship.status === "completed" ? `<button class="small-button" id="championshipDayReopenButton" type="button">Reopen Scores</button>` : ""}
+        ${championship.status === "completed" ? `<button class="small-button championship-day-export-excel" id="championshipDayExportExcelButton" type="button">Export to Excel</button>` : ""}
       </div>
     </div>
     <div class="championship-day-stat-grid">
@@ -2693,6 +2694,10 @@ function bindChampionshipDayWorkspace() {
     await loadPortalData();
   });
 
+  document.querySelector("#championshipDayExportExcelButton")?.addEventListener("click", async () => {
+    await exportChampionshipDayExcel(state.championshipDayDetail.id);
+  });
+
   document.querySelector("#championshipDayChartPlayerFilter")?.addEventListener("change", (event) => {
     state.championshipDayChartPlayerFilter = event.target.value;
     renderAdminPortal();
@@ -2760,6 +2765,39 @@ function bindChampionshipDayWorkspace() {
     event.preventDefault();
     await submitChampionshipDayWorkspaceRound();
   });
+}
+
+async function exportChampionshipDayExcel(championshipId) {
+  const response = await fetch(`/api/admin/championship-day/${encodeURIComponent(championshipId)}/export?format=xlsx`, {
+    headers: portalAdminHeaders()
+  });
+
+  if (!response.ok) {
+    let message = "Excel export failed";
+
+    try {
+      const data = await response.json();
+      message = data.error ?? message;
+    } catch {
+      // Binary endpoints may not return JSON when a server error occurs.
+    }
+
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? "championship-dashboard.xlsx";
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  showToast("Excel dashboard exported");
 }
 
 function renderChampionshipDayScoreTabs() {
