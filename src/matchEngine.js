@@ -29,6 +29,7 @@ export const BATHROOM_BREAK_DURATION_MS = 120_000;
 export const SLAM_DURATION_MS = 5_000;
 export const TAKE_DAT_DURATION_MS = 5_000;
 export const REACTION_DURATION_MS = 7_000;
+export const BOARD_REVIEW_HOLD_MS = 10_000;
 export const REACTION_TYPES = Object.freeze(["laughing", "angry", "serious", "sick", "confused"]);
 export const ACTIVE_PLAYERS_PER_GAME = 4;
 export const MAX_MATCH_PLAYERS = 7;
@@ -39,6 +40,8 @@ export const DEFAULT_MATCH_SETTINGS = Object.freeze({
   finalReviewDurationMs: FINAL_REVIEW_DURATION_MS,
   bathroomBreakDurationMs: BATHROOM_BREAK_DURATION_MS,
   seedToBoardRevealDurationMs: 10_000,
+  slamUsesPerGame: 1,
+  takeDatUsesPerGame: 1,
   infractionsPerPenalty: 2,
   penaltyPoints: -1
 });
@@ -87,6 +90,8 @@ export function startMatch(options) {
     finalReviewDurationMs: matchSettings.finalReviewDurationMs,
     bathroomBreakDurationMs: matchSettings.bathroomBreakDurationMs,
     seedToBoardRevealDurationMs: matchSettings.seedToBoardRevealDurationMs,
+    slamUsesPerGame: matchSettings.slamUsesPerGame,
+    takeDatUsesPerGame: matchSettings.takeDatUsesPerGame,
     infractionsPerPenalty: matchSettings.infractionsPerPenalty,
     penaltyPoints: matchSettings.penaltyPoints,
     bathroomBreaksByPlayerId: Object.fromEntries(rosterOrder.map((playerId) => [playerId, false])),
@@ -207,8 +212,10 @@ export function slamTile(match, playerId, requestedMove, options = {}) {
 
   assertActiveTurn(match, playerId, now);
 
-  if (match.game.slamUsedByPlayerId?.[playerId]) {
-    throw new Error("This player has already used Slam in this round.");
+  const usedCount = Number(match.game.slamUsedByPlayerId?.[playerId] ?? 0);
+
+  if (usedCount >= match.slamUsesPerGame) {
+    throw new Error("This player has already used all Slam plays in this round.");
   }
 
   const move = normalizeRequestedMove(match, requestedMove);
@@ -223,7 +230,7 @@ export function slamTile(match, playerId, requestedMove, options = {}) {
       ...match.game,
       slamUsedByPlayerId: {
         ...(match.game.slamUsedByPlayerId ?? {}),
-        [playerId]: true
+        [playerId]: usedCount + 1
       }
     }
   };
@@ -251,8 +258,10 @@ export function useTakeDat(match, playerId, options = {}) {
     throw new Error("Only active players can use TAKE DAT.");
   }
 
-  if (match.game.takeDatUsedByPlayerId?.[playerId]) {
-    throw new Error("This player has already used TAKE DAT in this round.");
+  const usedCount = Number(match.game.takeDatUsedByPlayerId?.[playerId] ?? 0);
+
+  if (usedCount >= match.takeDatUsesPerGame) {
+    throw new Error("This player has already used all TAKE DAT plays in this round.");
   }
 
   return {
@@ -261,7 +270,7 @@ export function useTakeDat(match, playerId, options = {}) {
       ...match.game,
       takeDatUsedByPlayerId: {
         ...(match.game.takeDatUsedByPlayerId ?? {}),
-        [playerId]: true
+        [playerId]: usedCount + 1
       },
       lastTakeDat: {
         type: "takeDat",
@@ -784,6 +793,7 @@ function applyPlayableMove(match, playerId, requestedMove, options) {
   };
   const lock = classifyLockAfterMove(state, requestedMove);
   const nextState = applyMoveToState(state, requestedMove);
+  const board = boardWithPlayAttribution(nextState.board, nextState.appliedMove, playerId, now);
   const action = {
     type: "play",
     playerId,
@@ -793,7 +803,7 @@ function applyPlayableMove(match, playerId, requestedMove, options) {
   };
   const nextGame = {
     ...match.game,
-    board: nextState.board,
+    board,
     hands: nextState.hands,
     requiredOpeningTileId: null,
     lastMove: {
@@ -960,6 +970,9 @@ function completeGame(match, scoreResult, options) {
         endReason,
         winnerId,
         lockingPlayerId,
+        board: match.game.board,
+        boardHoldUntil: now + BOARD_REVIEW_HOLD_MS,
+        activePlayerIds: match.playerOrder,
         scoreResult,
         scoresBefore: match.rawScores,
         scoresAfter: rawScores,
@@ -971,7 +984,7 @@ function completeGame(match, scoreResult, options) {
     };
   }
 
-  const rotatedMatch = rotatePlayersForNextGame(baseMatch, scoreResult);
+  const rotatedMatch = rotatePlayersForNextGame(baseMatch, scoreResult, rng);
 
   return {
     ...rotatedMatch,
@@ -987,6 +1000,9 @@ function completeGame(match, scoreResult, options) {
       endReason,
       winnerId,
       lockingPlayerId,
+      board: match.game.board,
+      boardHoldUntil: now + BOARD_REVIEW_HOLD_MS,
+      activePlayerIds: match.playerOrder,
       scoreResult,
       scoresBefore: match.rawScores,
       scoresAfter: rawScores,
@@ -995,7 +1011,7 @@ function completeGame(match, scoreResult, options) {
   };
 }
 
-function rotatePlayersForNextGame(match, scoreResult) {
+function rotatePlayersForNextGame(match, scoreResult, rng = Math.random) {
   const rosterOrder = match.rosterOrder ?? match.playerOrder;
   const benchPlayerIds = match.benchPlayerIds ?? [];
   const sackCount = Math.min(
@@ -1005,13 +1021,16 @@ function rotatePlayersForNextGame(match, scoreResult) {
   );
 
   if (sackCount <= 0) {
+    const nextPlayerOrder = seatingOrderFromPlacements(match, scoreResult, [], rng);
+
     return {
       ...match,
+      playerOrder: nextPlayerOrder,
       lastRotation: {
         sackCount: 0,
         sackedPlayerIds: [],
         incomingPlayerIds: [],
-        activePlayerIds: match.playerOrder,
+        activePlayerIds: nextPlayerOrder,
         benchPlayerIds
       }
     };
@@ -1022,8 +1041,7 @@ function rotatePlayersForNextGame(match, scoreResult) {
     .slice(0, sackCount)
     .map((placement) => placement.playerId);
   const incomingPlayerIds = benchPlayerIds.slice(0, sackCount);
-  const remainingActiveIds = match.playerOrder.filter((playerId) => !sackedPlayerIds.includes(playerId));
-  const nextPlayerOrder = [...remainingActiveIds, ...incomingPlayerIds];
+  const nextPlayerOrder = seatingOrderFromPlacements(match, scoreResult, incomingPlayerIds, rng, sackedPlayerIds);
   const nextBenchPlayerIds = [
     ...sackedPlayerIds,
     ...benchPlayerIds.slice(sackCount)
@@ -1041,6 +1059,98 @@ function rotatePlayersForNextGame(match, scoreResult) {
       benchPlayerIds: nextBenchPlayerIds
     }
   };
+}
+
+function boardWithPlayAttribution(board, appliedMove, playerId, now) {
+  const playIndex = appliedMove.end === "left" ? 0 : board.plays.length - 1;
+
+  return Object.freeze({
+    ...board,
+    plays: Object.freeze(board.plays.map((play, index) => index === playIndex
+      ? Object.freeze({
+        ...play,
+        playerId,
+        playedAt: now
+      })
+      : play))
+  });
+}
+
+function seatingOrderFromPlacements(match, scoreResult, incomingPlayerIds = [], rng = Math.random, sackedPlayerIds = []) {
+  const previousOrder = match.playerOrder;
+  const placements = new Map(scoreResult.placements.map((placement) => [placement.playerId, placement.place]));
+  const firstPlace = scoreResult.placements.find((placement) => placement.place === 1)?.playerId ?? previousOrder[0];
+  const firstSeatIndex = Math.max(0, previousOrder.indexOf(firstPlace));
+  const targetSeatByPlace = new Map([
+    [1, firstSeatIndex],
+    [3, (firstSeatIndex + 1) % ACTIVE_PLAYERS_PER_GAME],
+    [2, (firstSeatIndex + 2) % ACTIVE_PLAYERS_PER_GAME],
+    [4, (firstSeatIndex + 3) % ACTIVE_PLAYERS_PER_GAME]
+  ]);
+  const nextSeats = new Array(ACTIVE_PLAYERS_PER_GAME).fill(null);
+  const sacked = new Set(sackedPlayerIds);
+
+  for (const playerId of previousOrder) {
+    if (sacked.has(playerId)) {
+      continue;
+    }
+
+    const place = placements.get(playerId);
+    const seatIndex = targetSeatByPlace.get(place);
+
+    if (seatIndex !== undefined) {
+      nextSeats[seatIndex] = playerId;
+    }
+  }
+
+  const incoming = [...incomingPlayerIds].sort((first, second) => {
+    const firstPlace = previousChampionshipPlace(match, first);
+    const secondPlace = previousChampionshipPlace(match, second);
+
+    if (firstPlace !== secondPlace) {
+      return firstPlace - secondPlace;
+    }
+
+    if (firstPlace === Number.POSITIVE_INFINITY && secondPlace === Number.POSITIVE_INFINITY) {
+      return deterministicSeatRank(first) - deterministicSeatRank(second);
+    }
+
+    return (match.rosterOrder ?? previousOrder).indexOf(first) - (match.rosterOrder ?? previousOrder).indexOf(second);
+  });
+
+  for (const playerId of incoming) {
+    const previousPlace = previousChampionshipPlace(match, playerId);
+    const preferredSeat = targetSeatByPlace.get(previousPlace);
+
+    if (preferredSeat !== undefined && nextSeats[preferredSeat] === null) {
+      nextSeats[preferredSeat] = playerId;
+      continue;
+    }
+
+    const openSeat = nextSeats.findIndex((value) => value === null);
+
+    if (openSeat !== -1) {
+      nextSeats[openSeat] = playerId;
+    }
+  }
+
+  return nextSeats.filter(Boolean);
+}
+
+function previousChampionshipPlace(match, playerId) {
+  for (let index = match.completedGames.length - 1; index >= 0; index -= 1) {
+    const placement = match.completedGames[index].scoreResult?.placements?.find((item) => item.playerId === playerId);
+
+    if (placement) {
+      return placement.place;
+    }
+  }
+
+  return Number.POSITIVE_INFINITY;
+}
+
+function deterministicSeatRank(playerId) {
+  return [...String(playerId)].reduce((hash, character) => ((hash * 31) + character.charCodeAt(0)) % 100_000, 7);
 }
 
 function startGame(match, options) {
@@ -1084,10 +1194,10 @@ function startGame(match, options) {
         match.playerOrder.map((playerId) => [playerId, false])
       ),
       slamUsedByPlayerId: Object.fromEntries(
-        match.playerOrder.map((playerId) => [playerId, false])
+        match.playerOrder.map((playerId) => [playerId, 0])
       ),
       takeDatUsedByPlayerId: Object.fromEntries(
-        match.playerOrder.map((playerId) => [playerId, false])
+        match.playerOrder.map((playerId) => [playerId, 0])
       ),
       lastTakeDat: null,
       animationLock: null,
@@ -1226,6 +1336,8 @@ function normalizeMatchSettings(settings = {}) {
     finalReviewDurationMs: numberSetting(settings.finalReviewDurationMs, DEFAULT_MATCH_SETTINGS.finalReviewDurationMs),
     bathroomBreakDurationMs: numberSetting(settings.bathroomBreakDurationMs, DEFAULT_MATCH_SETTINGS.bathroomBreakDurationMs),
     seedToBoardRevealDurationMs: numberSetting(settings.seedToBoardRevealDurationMs, DEFAULT_MATCH_SETTINGS.seedToBoardRevealDurationMs),
+    slamUsesPerGame: boundedIntSetting(settings.slamUsesPerGame, DEFAULT_MATCH_SETTINGS.slamUsesPerGame, 1, 3),
+    takeDatUsesPerGame: boundedIntSetting(settings.takeDatUsesPerGame, DEFAULT_MATCH_SETTINGS.takeDatUsesPerGame, 1, 3),
     infractionsPerPenalty: numberSetting(settings.infractionsPerPenalty, DEFAULT_MATCH_SETTINGS.infractionsPerPenalty),
     penaltyPoints: numberSetting(settings.penaltyPoints, DEFAULT_MATCH_SETTINGS.penaltyPoints)
   };
@@ -1241,6 +1353,16 @@ function turnDurationSetting(value, fallback) {
   const number = numberSetting(value, fallback);
 
   return [25_000, 30_000, 45_000].includes(number) ? number : fallback;
+}
+
+function boundedIntSetting(value, fallback, min, max) {
+  const number = Math.round(numberSetting(value, fallback));
+
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+
+  return Math.max(min, Math.min(max, number));
 }
 
 function assertActiveTurn(match, playerId, now = Date.now()) {

@@ -7,10 +7,10 @@
     <meta name="theme-color" content="#174d3f">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Dominoes">
-    <link rel="icon" href="/icon.svg?v=78" type="image/svg+xml">
-    <link rel="alternate icon" href="/favicon.ico?v=78" sizes="any">
-    <link rel="manifest" href="/manifest.webmanifest?v=78">
-    <link rel="stylesheet" href="/styles.css?v=78">
+    <link rel="icon" href="/icon.svg?v=80" type="image/svg+xml">
+    <link rel="alternate icon" href="/favicon.ico?v=80" sizes="any">
+    <link rel="manifest" href="/manifest.webmanifest?v=80">
+    <link rel="stylesheet" href="/styles.css?v=80">
   </head>
   <body>
     <div class="app-shell">
@@ -402,6 +402,20 @@
                       <option value="20">20</option>
                     </select>
                   </label>
+                  <label>Slam uses
+                    <select id="settingSlamUses">
+                      <option value="1">1</option>
+                      <option value="2">2</option>
+                      <option value="3">3</option>
+                    </select>
+                  </label>
+                  <label>Take DAT uses
+                    <select id="settingTakeDatUses">
+                      <option value="1">1</option>
+                      <option value="2">2</option>
+                      <option value="3">3</option>
+                    </select>
+                  </label>
                   <label>Infractions <input id="settingInfractions" type="number" min="1" max="20"></label>
                   <label>Penalty <input id="settingPenalty" type="number" min="-100" max="0"></label>
                 </div>
@@ -468,6 +482,6 @@
       <div class="toast hidden" id="toast"></div>
     </div>
 
-    <script type="module" src="/app.js?v=79"></script>
+    <script type="module" src="/app.js?v=80"></script>
   </body>
 </html>

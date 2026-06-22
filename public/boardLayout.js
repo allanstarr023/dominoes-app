@@ -346,6 +346,8 @@ function makeLayoutTile(options) {
     displayFirst,
     displaySecond,
     isDouble: play.leftValue === play.rightValue,
+    playerId: play.playerId ?? null,
+    playedAt: play.playedAt ?? null,
     side
   };
 }

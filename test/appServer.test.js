@@ -1548,7 +1548,7 @@ test("slam endpoint broadcasts animation lock and rejects play during the lock",
     assert.equal(slammed.body.room.match.game.animationLock.playerId, turnPlayerId);
     assert.equal(typeof slammed.body.room.match.game.animationLock.startedAt, "number");
     assert.equal(typeof slammed.body.room.match.game.animationLock.expiresAt, "number");
-    assert.equal(slammed.body.room.match.game.slamUsedByPlayerId[turnPlayerId], true);
+    assert.equal(slammed.body.room.match.game.slamUsedByPlayerId[turnPlayerId], 1);
     assert.equal(slammed.body.room.match.game.lastAction.effect, "slam");
 
     const rejectedPlay = await postJson(`${baseUrl}/api/rooms/room-slam/play`, {
@@ -1616,7 +1616,7 @@ test("take dat endpoint serializes taunt state for lobby viewers and rejects rep
     });
 
     assert.equal(used.status, 200);
-    assert.equal(used.body.room.match.game.takeDatUsedByPlayerId.p3, true);
+    assert.equal(used.body.room.match.game.takeDatUsedByPlayerId.p3, 1);
     assert.equal(used.body.room.match.game.lastTakeDat.type, "takeDat");
     assert.equal(used.body.room.match.game.lastTakeDat.playerId, "p3");
     assert.ok(used.body.room.match.game.lastTakeDat.expiresAt > used.body.room.match.game.lastTakeDat.at);
@@ -1626,13 +1626,13 @@ test("take dat endpoint serializes taunt state for lobby viewers and rejects rep
     });
 
     assert.equal(repeated.status, 500);
-    assert.match(repeated.body.error, /already used TAKE DAT/);
+    assert.match(repeated.body.error, /already used all TAKE DAT/);
 
     const lobbyView = await getJson(`${baseUrl}/api/rooms/room-take-dat?playerId=p5`);
 
     assert.equal(lobbyView.status, 200);
     assert.equal(lobbyView.body.room.match.game.lastTakeDat.playerId, "p3");
-    assert.equal(lobbyView.body.room.match.game.takeDatUsedByPlayerId.p3, true);
+    assert.equal(lobbyView.body.room.match.game.takeDatUsedByPlayerId.p3, 1);
     assert.deepEqual(lobbyView.body.room.match.game.hand, []);
   } finally {
     await closeTestServer(server);

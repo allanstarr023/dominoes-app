@@ -431,6 +431,8 @@ export function normalizeSettings(input = {}) {
     finalReviewDurationMs: intSetting(input.finalReviewDurationMs, DEFAULT_MATCH_SETTINGS.finalReviewDurationMs, 0, 300_000),
     bathroomBreakDurationMs: intSetting(input.bathroomBreakDurationMs, DEFAULT_MATCH_SETTINGS.bathroomBreakDurationMs, 0, 600_000),
     seedToBoardRevealDurationMs: seedRevealDurationSetting(input.seedToBoardRevealDurationMs, DEFAULT_MATCH_SETTINGS.seedToBoardRevealDurationMs),
+    slamUsesPerGame: intSetting(input.slamUsesPerGame, DEFAULT_MATCH_SETTINGS.slamUsesPerGame, 1, 3),
+    takeDatUsesPerGame: intSetting(input.takeDatUsesPerGame, DEFAULT_MATCH_SETTINGS.takeDatUsesPerGame, 1, 3),
     infractionsPerPenalty: intSetting(input.infractionsPerPenalty, DEFAULT_MATCH_SETTINGS.infractionsPerPenalty, 1, 20),
     penaltyPoints: intSetting(input.penaltyPoints, DEFAULT_MATCH_SETTINGS.penaltyPoints, -100, 0)
   };

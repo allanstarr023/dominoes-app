@@ -2713,6 +2713,46 @@ body.board-fullscreen-active .board-fullscreen-button {
   padding: 12px 0 2px;
 }
 
+.hand-tile-wrap {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding-top: 24px;
+  flex: 0 0 auto;
+}
+
+.hand-tile-wrap[draggable="true"] {
+  cursor: grab;
+}
+
+.hand-tile-wrap[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.tile-flip-button {
+  position: absolute;
+  top: 0;
+  width: 26px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border-radius: 999px;
+  background: #174d3f;
+  color: #fff;
+  font-size: 0.8rem;
+  line-height: 1;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18);
+}
+
+.tile-flip-button:hover {
+  background: #0d4c3b;
+}
+
+.tile-flip-button:disabled {
+  background: #a8afab;
+}
+
 .tile-button {
   border: 0;
   background: transparent;
@@ -2720,28 +2760,40 @@ body.board-fullscreen-active .board-fullscreen-button {
   min-height: auto;
 }
 
-.tile-button[draggable="true"] {
-  cursor: grab;
-}
-
-.tile-button[draggable="true"]:active {
-  cursor: grabbing;
-}
-
 .tile-button .domino {
   transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
 
-.tile-button:hover .domino,
+.hand-tile-wrap:not(.unplayable) .tile-button:hover .domino,
 .tile-button.selected .domino {
   transform: translateY(-5px);
   box-shadow: 0 9px 16px rgba(0, 0, 0, 0.28);
 }
 
-.tile-button:disabled .domino {
+.hand-tile-wrap.unplayable .domino {
   opacity: 0.45;
   transform: none;
   filter: grayscale(1);
+}
+
+.hand-tile-wrap.selected .domino {
+  outline: 3px solid #f0b940;
+  outline-offset: 3px;
+}
+
+.review-board-notice {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  z-index: 4;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(11, 56, 47, 0.9);
+  color: #fff;
+  padding: 7px 13px;
+  font-size: 0.82rem;
+  font-weight: 900;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.2);
 }
 
 .pip-face {

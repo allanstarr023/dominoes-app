@@ -2347,6 +2347,8 @@ function serializeMatch(match, viewerPlayerId) {
     finalReviewDurationMs: match.finalReviewDurationMs,
     bathroomBreakDurationMs: match.bathroomBreakDurationMs,
     seedToBoardRevealDurationMs: match.seedToBoardRevealDurationMs,
+    slamUsesPerGame: match.slamUsesPerGame,
+    takeDatUsesPerGame: match.takeDatUsesPerGame,
     infractionsPerPenalty: match.infractionsPerPenalty,
     penaltyPoints: match.penaltyPoints,
     betweenGames: match.betweenGames ? serializeBetweenGames(match.betweenGames) : null,
@@ -2364,6 +2366,9 @@ function serializeMatch(match, viewerPlayerId) {
       endReason: game.endReason,
       winnerId: game.winnerId,
       lockingPlayerId: game.lockingPlayerId,
+      board: serializeBoard(game.board),
+      activePlayerIds: game.activePlayerIds ?? [],
+      benchPlayerIds: game.benchPlayerIds ?? [],
       placements: game.scoreResult.placements,
       pointsByPlayerId: game.scoreResult.pointsByPlayerId
     })),
@@ -2401,6 +2406,9 @@ function serializeBetweenGames(betweenGames) {
     endReason: betweenGames.endReason,
     winnerId: betweenGames.winnerId,
     lockingPlayerId: betweenGames.lockingPlayerId,
+    board: serializeBoard(betweenGames.board),
+    boardHoldUntil: betweenGames.boardHoldUntil ?? null,
+    activePlayerIds: betweenGames.activePlayerIds ?? [],
     scoresBefore: betweenGames.scoresBefore,
     scoresAfter: betweenGames.scoresAfter,
     startNowRequest: betweenGames.startNowRequest
@@ -2435,6 +2443,9 @@ function serializeFinalReview(finalReview) {
     endReason: finalReview.endReason,
     winnerId: finalReview.winnerId,
     lockingPlayerId: finalReview.lockingPlayerId,
+    board: serializeBoard(finalReview.board),
+    boardHoldUntil: finalReview.boardHoldUntil ?? null,
+    activePlayerIds: finalReview.activePlayerIds ?? [],
     scoresBefore: finalReview.scoresBefore,
     scoresAfter: finalReview.scoresAfter,
     finalScores: finalReview.finalScores,
@@ -2457,16 +2468,7 @@ function serializeFinalReview(finalReview) {
 function serializeGame(game, viewerPlayerId) {
   return {
     number: game.number,
-    board: {
-      leftEnd: game.board.leftEnd,
-      rightEnd: game.board.rightEnd,
-      plays: game.board.plays.map((play) => ({
-        tileId: play.tile.id,
-        end: play.end,
-        leftValue: play.leftValue,
-        rightValue: play.rightValue
-      }))
-    },
+    board: serializeBoard(game.board),
     currentPlayerId: game.currentPlayerId,
     turnStartedAt: game.turnStartedAt,
     turnDeadlineAt: game.turnDeadlineAt,
@@ -2501,6 +2503,25 @@ function serializeGame(game, viewerPlayerId) {
     handCounts: Object.fromEntries(
       Object.entries(game.hands).map(([playerId, hand]) => [playerId, hand.length])
     )
+  };
+}
+
+function serializeBoard(board) {
+  if (!board) {
+    return null;
+  }
+
+  return {
+    leftEnd: board.leftEnd,
+    rightEnd: board.rightEnd,
+    plays: board.plays.map((play) => ({
+      tileId: play.tile.id,
+      end: play.end,
+      leftValue: play.leftValue,
+      rightValue: play.rightValue,
+      playerId: play.playerId ?? null,
+      playedAt: play.playedAt ?? null
+    }))
   };
 }
 

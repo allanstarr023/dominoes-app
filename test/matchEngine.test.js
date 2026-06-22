@@ -8,6 +8,7 @@ import {
 import {
   BETWEEN_GAMES_DURATION_MS,
   BATHROOM_BREAK_DURATION_MS,
+  BOARD_REVIEW_HOLD_MS,
   FINAL_REVIEW_DURATION_MS,
   MATCH_STATUS,
   REACTION_DURATION_MS,
@@ -84,7 +85,7 @@ test("slam plays a legal tile once and delays turn progression until the animati
   const slammed = slamTile(match, "p1", { tileId: "6:6", end: "opening" }, { now: 2000 });
 
   assert.equal(slammed.game.currentPlayerId, "p1");
-  assert.equal(slammed.game.slamUsedByPlayerId.p1, true);
+  assert.equal(slammed.game.slamUsedByPlayerId.p1, 1);
   assert.equal(slammed.game.animationLock.type, "slam");
   assert.equal(slammed.game.animationLock.tileId, "6:6");
   assert.equal(slammed.game.animationLock.expiresAt, 2000 + SLAM_DURATION_MS);
@@ -158,7 +159,7 @@ test("slam usage is rejected a second time in the same round and resets next rou
   assert.equal(p4Passed.game.currentPlayerId, "p1");
   assert.throws(
     () => slamTile(p4Passed, "p1", { tileId: "6:0", end: "left" }, { now: 11_000 }),
-    /already used Slam/
+    /already used all Slam/
   );
 
   const gameBreak = playTile(p4Passed, "p1", { tileId: "6:0", end: "left" }, { now: 12_000 });
@@ -173,8 +174,34 @@ test("slam usage is rejected a second time in the same round and resets next rou
   });
 
   assert.equal(nextGame.currentGameNumber, 2);
-  assert.equal(nextGame.game.slamUsedByPlayerId.p1, false);
+  assert.equal(nextGame.game.slamUsedByPlayerId.p1, 0);
   assert.equal(nextGame.game.animationLock, null);
+});
+
+test("slam and take dat limits can be configured up to three uses per game", () => {
+  const match = startMatch({
+    players,
+    matchLength: 5,
+    now: 1000,
+    hands: basicHands(),
+    settings: {
+      slamUsesPerGame: 2,
+      takeDatUsesPerGame: 3
+    }
+  });
+  const firstTaunt = useTakeDat(match, "p2", { now: 1500 });
+  const secondTaunt = useTakeDat(firstTaunt, "p2", { now: 1600 });
+  const thirdTaunt = useTakeDat(secondTaunt, "p2", { now: 1700 });
+
+  assert.equal(thirdTaunt.game.takeDatUsedByPlayerId.p2, 3);
+  assert.throws(
+    () => useTakeDat(thirdTaunt, "p2", { now: 1800 }),
+    /already used all TAKE DAT/
+  );
+
+  const firstSlam = slamTile(thirdTaunt, "p1", { tileId: "6:6", end: "opening" }, { now: 2000 });
+
+  assert.equal(firstSlam.game.slamUsedByPlayerId.p1, 1);
 });
 
 test("slam validates normal pip and end rules", () => {
@@ -202,7 +229,7 @@ test("take dat can be used once without changing turn order", () => {
 
   assert.equal(afterTaunt.game.currentPlayerId, "p1");
   assert.equal(afterTaunt.game.turnDeadlineAt, match.game.turnDeadlineAt);
-  assert.equal(afterTaunt.game.takeDatUsedByPlayerId.p3, true);
+  assert.equal(afterTaunt.game.takeDatUsedByPlayerId.p3, 1);
   assert.equal(afterTaunt.game.lastTakeDat.type, "takeDat");
   assert.equal(afterTaunt.game.lastTakeDat.playerId, "p3");
   assert.equal(afterTaunt.game.lastTakeDat.expiresAt, 2000 + TAKE_DAT_DURATION_MS);
@@ -224,7 +251,7 @@ test("take dat repeated use is rejected and resets next round", () => {
 
   assert.throws(
     () => useTakeDat(afterTaunt, "p1", { now: 3000 }),
-    /already used TAKE DAT/
+    /already used all TAKE DAT/
   );
 
   const gameBreak = playTile(afterTaunt, "p1", { tileId: "6:6", end: "opening" }, { now: 4000 });
@@ -238,7 +265,7 @@ test("take dat repeated use is rejected and resets next round", () => {
     }
   });
 
-  assert.equal(nextGame.game.takeDatUsedByPlayerId.p1, false);
+  assert.equal(nextGame.game.takeDatUsedByPlayerId.p1, 0);
   assert.equal(nextGame.game.lastTakeDat, null);
 });
 
@@ -299,6 +326,10 @@ test("starts the next game with the previous winner using any tile", () => {
   assert.equal(gameBreak.betweenGames.nextGameNumber, 2);
   assert.equal(gameBreak.betweenGames.durationMs, BETWEEN_GAMES_DURATION_MS);
   assert.equal(gameBreak.betweenGames.deadlineAt, 62_000);
+  assert.equal(gameBreak.betweenGames.boardHoldUntil, 2000 + BOARD_REVIEW_HOLD_MS);
+  assert.deepEqual(gameBreak.betweenGames.activePlayerIds, ["p1", "p2", "p3", "p4"]);
+  assert.equal(gameBreak.betweenGames.board.plays.at(-1).playerId, "p1");
+  assert.equal(gameBreak.betweenGames.board.plays.at(-1).playedAt, 2000);
   assert.deepEqual(gameBreak.betweenGames.scoresBefore, {
     p1: 0,
     p2: 0,
@@ -392,7 +423,7 @@ test("six-player sack rotation swaps third and fourth place with the lobby playe
 
   const gameBreak = playTile(match, "p1", { tileId: "6:6" }, { now: 2000 });
 
-  assert.deepEqual(gameBreak.playerOrder, ["p1", "p4", "p5", "p6"]);
+  assert.deepEqual(gameBreak.playerOrder, ["p1", "p5", "p4", "p6"]);
   assert.deepEqual(gameBreak.benchPlayerIds, ["p3", "p2"]);
   assert.deepEqual(gameBreak.betweenGames.rotation.sackedPlayerIds, ["p3", "p2"]);
 });
@@ -412,10 +443,31 @@ test("seven-player sack rotation keeps only first place active and brings in thr
 
   const gameBreak = playTile(match, "p4", { tileId: "6:6" }, { now: 2000 });
 
-  assert.deepEqual(gameBreak.playerOrder, ["p4", "p5", "p6", "p7"]);
+  assert.deepEqual(gameBreak.playerOrder, ["p5", "p6", "p7", "p4"]);
   assert.deepEqual(gameBreak.benchPlayerIds, ["p3", "p2", "p1"]);
   assert.deepEqual(gameBreak.betweenGames.rotation.sackedPlayerIds, ["p3", "p2", "p1"]);
   assert.equal(gameBreak.previousWinnerId, "p4");
+});
+
+test("four active players are reseated by placement after every game", () => {
+  const match = startMatch({
+    players,
+    matchLength: 5,
+    now: 1000,
+    hands: {
+      p1: [t(2, 2)],
+      p2: [t(4, 4)],
+      p3: [t(5, 5)],
+      p4: [t(6, 6)]
+    }
+  });
+
+  assert.deepEqual(match.playerOrder, ["p1", "p2", "p3", "p4"]);
+
+  const gameBreak = playTile(match, "p4", { tileId: "6:6" }, { now: 2000 });
+
+  assert.deepEqual(gameBreak.playerOrder, ["p2", "p1", "p3", "p4"]);
+  assert.deepEqual(gameBreak.betweenGames.rotation.activePlayerIds, ["p2", "p1", "p3", "p4"]);
 });
 
 test("manual pass is only allowed when no legal move exists", () => {

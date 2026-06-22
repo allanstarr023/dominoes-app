@@ -2,12 +2,12 @@ import {
   loadAudioPreference,
   playTileSound,
   saveAudioPreference
-} from "./audio.js?v=78";
+} from "./audio.js?v=80";
 import {
   disposeChampionshipDayVisuals,
   renderChampionshipDayVisualAnalytics
-} from "./championshipDayCharts.js?v=78";
-import { clearPixiBoard, renderPixiBoard } from "./pixiBoardRenderer.js?v=78";
+} from "./championshipDayCharts.js?v=80";
+import { clearPixiBoard, renderPixiBoard } from "./pixiBoardRenderer.js?v=80";
 
 const state = {
   room: null,
@@ -46,13 +46,17 @@ const state = {
   soundEnabled: loadAudioPreference(),
   boardFullscreen: false,
   slamArmed: false,
+  handOrderByGameKey: {},
+  handFlipsByGameKey: {},
   takeDatTimer: null,
-  reactionTimer: null
+  reactionTimer: null,
+  boardHoldTimer: null
 };
 
 const CHAT_BLOCK_MINUTES = 5;
 const MAX_PLAYERS_PER_ROOM = 7;
 const ACTIVE_PLAYERS_PER_GAME = 4;
+const LAST_PLAY_LABEL_MS = 5_000;
 const REACTION_FACES = Object.freeze({
   laughing: { label: "Laughing", face: "\uD83D\uDE02" },
   angry: { label: "Angry", face: "\uD83D\uDE20" },
@@ -227,6 +231,8 @@ const els = {
   settingFinalSeconds: document.querySelector("#settingFinalSeconds"),
   settingBreakSeconds: document.querySelector("#settingBreakSeconds"),
   settingSeedSeconds: document.querySelector("#settingSeedSeconds"),
+  settingSlamUses: document.querySelector("#settingSlamUses"),
+  settingTakeDatUses: document.querySelector("#settingTakeDatUses"),
   settingInfractions: document.querySelector("#settingInfractions"),
   settingPenalty: document.querySelector("#settingPenalty"),
   toast: document.querySelector("#toast")
@@ -1351,6 +1357,28 @@ function renderTable() {
   }
 
   if (match.betweenGames || match.finalReview) {
+    const review = match.betweenGames ?? match.finalReview;
+    const holdBoard = review?.board?.plays?.length && Number(review.boardHoldUntil ?? 0) > Date.now();
+
+    if (holdBoard) {
+      scheduleBoardHoldClear(review.boardHoldUntil);
+      els.board.className = "board review-hold-board";
+      els.board.innerHTML = renderTableSeats(match, {
+        playerOrder: review.activePlayerIds?.length ? review.activePlayerIds : match.playerOrder,
+        currentPlayerId: null
+      }) + renderReviewBoardNotice(review);
+      void renderPixiBoard(els.board, {
+        plays: review.board.plays,
+        selectedEnds: [],
+        playerNamesById: playerNamesById(),
+        labelDurationMs: LAST_PLAY_LABEL_MS,
+        onTarget: null
+      });
+      return;
+    }
+
+    clearBoardHoldTimer();
+
     els.board.className = "board results-board";
     els.board.innerHTML = renderBetweenGameResults(match);
     if (match.betweenGames) {
@@ -1377,6 +1405,8 @@ function renderTable() {
       plays: [],
       openingEnabled: canPose,
       slamLock: game.animationLock,
+      playerNamesById: playerNamesById(),
+      labelDurationMs: LAST_PLAY_LABEL_MS,
       onTarget: playSelectedTile
     });
     return;
@@ -1391,6 +1421,8 @@ function renderTable() {
     plays: game.board.plays,
     selectedEnds,
     slamLock: game.animationLock,
+    playerNamesById: playerNamesById(),
+    labelDurationMs: LAST_PLAY_LABEL_MS,
     onTarget: playSelectedTile
   });
 }
@@ -1409,13 +1441,15 @@ function boardClassName(game) {
   return classes.join(" ");
 }
 
-function renderTableSeats(match) {
-  if (!match?.game) {
+function renderTableSeats(match, options = {}) {
+  if (!match) {
     return "";
   }
 
   const positions = ["south", "west", "north", "east"];
-  const activeSeats = match.playerOrder
+  const playerOrder = options.playerOrder ?? match.playerOrder;
+  const currentPlayerId = options.currentPlayerId === undefined ? match.game?.currentPlayerId : options.currentPlayerId;
+  const activeSeats = playerOrder
     .slice(0, ACTIVE_PLAYERS_PER_GAME)
     .map((playerId, index) => ({
       playerId,
@@ -1426,7 +1460,7 @@ function renderTableSeats(match) {
   return `
     <div class="table-player-seats" aria-hidden="true">
       ${activeSeats.map(({ playerId, seat, position }) => `
-        <div class="table-player-seat seat-${position} ${match.game.currentPlayerId === playerId ? "is-turn" : ""}">
+        <div class="table-player-seat seat-${position} ${currentPlayerId === playerId ? "is-turn" : ""}">
           ${avatarHtml(seat?.avatarId, "seat-avatar")}
           <span>${escapeHtml(playerName(playerId))}</span>
         </div>
@@ -1641,6 +1675,23 @@ function latestVisibleAction(match) {
   })[0];
 }
 
+function scheduleBoardHoldClear(deadlineAt) {
+  clearBoardHoldTimer();
+  const delay = Math.max(0, Number(deadlineAt ?? 0) - Date.now() + 80);
+
+  state.boardHoldTimer = setTimeout(() => {
+    state.boardHoldTimer = null;
+    render();
+  }, delay);
+}
+
+function clearBoardHoldTimer() {
+  if (state.boardHoldTimer) {
+    clearTimeout(state.boardHoldTimer);
+    state.boardHoldTimer = null;
+  }
+}
+
 function playSoundForLatestAction(match) {
   const action = latestVisibleAction(match);
 
@@ -1687,11 +1738,13 @@ function renderHand() {
     && state.room.match.status === "active"
     && state.room.status !== "cancelled"
     && !inputLocked;
-  const hand = canSeeHand ? game.hand ?? [] : [];
+  const hand = canSeeHand ? orderedHand(game.hand ?? []) : [];
   const hasPlayableTile = hand.some((tile) => playableEnds(tile, game).length > 0);
   const seedUsed = Boolean(game?.seedToBoardUsedByPlayerId?.[state.playerId]);
-  const slamUsed = Boolean(game?.slamUsedByPlayerId?.[state.playerId]);
-  const takeDatUsed = Boolean(game?.takeDatUsedByPlayerId?.[state.playerId]);
+  const slamUsedCount = Number(game?.slamUsedByPlayerId?.[state.playerId] ?? 0);
+  const takeDatUsedCount = Number(game?.takeDatUsedByPlayerId?.[state.playerId] ?? 0);
+  const slamLimit = Number(state.room.match?.slamUsesPerGame ?? 1);
+  const takeDatLimit = Number(state.room.match?.takeDatUsesPerGame ?? 1);
   const selectedTile = currentSelectedTile(game);
   const selectedEnds = selectedTile ? playableEnds(selectedTile, game) : [];
   const canUseTakeDat = Boolean(game)
@@ -1708,10 +1761,10 @@ function renderHand() {
   els.passButton.disabled = !myTurn || hasPlayableTile;
   els.seedBoardButton.disabled = !myTurn || seedUsed;
   els.seedBoardButton.textContent = seedUsed ? "Seed Used" : "Seed to Board";
-  els.slamButton.disabled = !myTurn || !selectedTile || selectedEnds.length === 0 || slamUsed;
-  els.slamButton.textContent = slamUsed ? "Slam Used" : state.slamArmed ? "Pick End" : "Slam";
-  els.takeDatButton.disabled = !canUseTakeDat || takeDatUsed;
-  els.takeDatButton.textContent = takeDatUsed ? "DAT Used" : "Take DAT";
+  els.slamButton.disabled = !myTurn || !selectedTile || selectedEnds.length === 0 || slamUsedCount >= slamLimit;
+  els.slamButton.textContent = slamUsedCount >= slamLimit ? "Slam Used" : state.slamArmed ? "Pick End" : `Slam ${slamLimit - slamUsedCount}`;
+  els.takeDatButton.disabled = !canUseTakeDat || takeDatUsedCount >= takeDatLimit;
+  els.takeDatButton.textContent = takeDatUsedCount >= takeDatLimit ? "DAT Used" : `Take DAT ${takeDatLimit - takeDatUsedCount}`;
   els.reactionSelect.disabled = !canSendReaction;
   els.reactionButton.disabled = !canSendReaction;
   els.soundToggle.checked = state.soundEnabled;
@@ -1728,19 +1781,48 @@ function renderHand() {
 
   els.hand.innerHTML = hand.map((tile) => {
     const ends = playableEnds(tile, game);
-    const disabled = !myTurn || ends.length === 0 || (game.requiredOpeningTileId && tile.id !== game.requiredOpeningTileId);
+    const playable = myTurn && ends.length > 0 && (!game.requiredOpeningTileId || tile.id === game.requiredOpeningTileId);
+    const flipped = handFlipSet().has(tile.id);
+    const displayTile = flipped ? flipTileForDisplay(tile) : tile;
 
     return `
-      <button class="tile-button ${state.selectedTile?.id === tile.id ? "selected" : ""}" data-tile-id="${tile.id}" draggable="${disabled ? "false" : "true"}" ${disabled ? "disabled" : ""}>
-        ${dominoHtml(tile)}
-      </button>
+      <div class="hand-tile-wrap ${state.selectedTile?.id === tile.id ? "selected" : ""} ${playable ? "" : "unplayable"}" data-tile-id="${tile.id}" draggable="${inputLocked ? "false" : "true"}">
+        <button class="tile-flip-button" type="button" data-flip-tile-id="${tile.id}" ${inputLocked ? "disabled" : ""} title="Flip tile" aria-label="Flip ${tile.id}">&#8635;</button>
+        <button class="tile-button ${state.selectedTile?.id === tile.id ? "selected" : ""}" type="button" data-tile-id="${tile.id}" aria-disabled="${playable ? "false" : "true"}">
+          ${dominoHtml(displayTile, "vertical")}
+        </button>
+      </div>
     `;
   }).join("");
 
   els.hand.querySelectorAll(".tile-button").forEach((button) => {
     button.addEventListener("click", () => onTileClick(hand.find((tile) => tile.id === button.dataset.tileId)));
-    button.addEventListener("dragstart", (event) => onTileDragStart(event, hand.find((tile) => tile.id === button.dataset.tileId)));
   });
+  els.hand.querySelectorAll(".tile-flip-button").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      flipHandTile(button.dataset.flipTileId);
+    });
+  });
+  els.hand.querySelectorAll(".hand-tile-wrap").forEach((tileWrap) => {
+    tileWrap.addEventListener("dragstart", (event) => onHandTileDragStart(event, tileWrap.dataset.tileId));
+    tileWrap.addEventListener("dragover", (event) => event.preventDefault());
+    tileWrap.addEventListener("drop", (event) => onHandTileDrop(event, tileWrap.dataset.tileId));
+  });
+}
+
+function renderReviewBoardNotice(review) {
+  const seconds = Math.max(0, Math.ceil((Number(review.boardHoldUntil ?? 0) - Date.now()) / 1000));
+
+  return `
+    <div class="review-board-notice" aria-live="polite">
+      Board holds for ${seconds}s
+    </div>
+  `;
+}
+
+function playerNamesById() {
+  return Object.fromEntries((state.room?.seats ?? []).map((seat) => [seat.playerId, seat.name]));
 }
 
 function renderChat() {
@@ -4243,7 +4325,7 @@ async function onTileClick(tile) {
   renderHand();
 }
 
-function onTileDragStart(event, tile) {
+function onHandTileDragStart(event, tileId) {
   const game = state.room.match?.game;
 
   if (game?.animationLock) {
@@ -4251,18 +4333,82 @@ function onTileDragStart(event, tile) {
     return;
   }
 
-  const ends = playableEnds(tile, game);
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", tileId);
+}
 
-  if (ends.length === 0) {
-    event.preventDefault();
+function onHandTileDrop(event, targetTileId) {
+  event.preventDefault();
+  const sourceTileId = event.dataTransfer.getData("text/plain");
+
+  if (!sourceTileId || !targetTileId || sourceTileId === targetTileId) {
     return;
   }
 
-  state.selectedTile = tile;
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData("text/plain", tile.id);
-  renderTable();
+  const key = handPreferenceKey();
+  const currentOrder = orderedHand(state.room.match?.game?.hand ?? []).map((tile) => tile.id);
+  const sourceIndex = currentOrder.indexOf(sourceTileId);
+  const targetIndex = currentOrder.indexOf(targetTileId);
+
+  if (sourceIndex === -1 || targetIndex === -1) {
+    return;
+  }
+
+  currentOrder.splice(sourceIndex, 1);
+  currentOrder.splice(targetIndex, 0, sourceTileId);
+  state.handOrderByGameKey[key] = currentOrder;
   renderHand();
+}
+
+function orderedHand(hand) {
+  const key = handPreferenceKey();
+  const currentIds = hand.map((tile) => tile.id);
+  const preferred = state.handOrderByGameKey[key] ?? currentIds;
+  const orderedIds = [
+    ...preferred.filter((tileId) => currentIds.includes(tileId)),
+    ...currentIds.filter((tileId) => !preferred.includes(tileId))
+  ];
+
+  state.handOrderByGameKey[key] = orderedIds;
+  return orderedIds
+    .map((tileId) => hand.find((tile) => tile.id === tileId))
+    .filter(Boolean);
+}
+
+function handPreferenceKey() {
+  const match = state.room?.match;
+  const gameNumber = match?.game?.number ?? match?.currentGameNumber ?? "waiting";
+  return `${state.roomId ?? "room"}:${state.playerId ?? "player"}:${match?.id ?? "match"}:${gameNumber}`;
+}
+
+function handFlipSet() {
+  const key = handPreferenceKey();
+
+  if (!state.handFlipsByGameKey[key]) {
+    state.handFlipsByGameKey[key] = new Set();
+  }
+
+  return state.handFlipsByGameKey[key];
+}
+
+function flipHandTile(tileId) {
+  const flips = handFlipSet();
+
+  if (flips.has(tileId)) {
+    flips.delete(tileId);
+  } else {
+    flips.add(tileId);
+  }
+
+  renderHand();
+}
+
+function flipTileForDisplay(tile) {
+  return {
+    ...tile,
+    high: tile.low,
+    low: tile.high
+  };
 }
 
 async function playSelectedTile(end) {
@@ -5127,6 +5273,8 @@ function fillSettingsForm(settings) {
   els.settingBreakSeconds.value = Math.round(settings.bathroomBreakDurationMs / 1000);
   const seedSeconds = Math.round((settings.seedToBoardRevealDurationMs ?? 10_000) / 1000);
   els.settingSeedSeconds.value = ["10", "15", "20"].includes(String(seedSeconds)) ? String(seedSeconds) : "10";
+  els.settingSlamUses.value = String(Math.max(1, Math.min(3, Number(settings.slamUsesPerGame ?? 1))));
+  els.settingTakeDatUses.value = String(Math.max(1, Math.min(3, Number(settings.takeDatUsesPerGame ?? 1))));
   els.settingInfractions.value = settings.infractionsPerPenalty;
   els.settingPenalty.value = settings.penaltyPoints;
 }
@@ -5146,6 +5294,8 @@ function settingsFromForm() {
     finalReviewDurationMs: Number(els.settingFinalSeconds.value) * 1000,
     bathroomBreakDurationMs: Number(els.settingBreakSeconds.value) * 1000,
     seedToBoardRevealDurationMs: Number(els.settingSeedSeconds.value) * 1000,
+    slamUsesPerGame: Number(els.settingSlamUses.value),
+    takeDatUsesPerGame: Number(els.settingTakeDatUses.value),
     infractionsPerPenalty: Number(els.settingInfractions.value),
     penaltyPoints: Number(els.settingPenalty.value)
   };
@@ -5353,7 +5503,7 @@ function registerServiceWorker() {
     return;
   }
 
-    navigator.serviceWorker.register("/sw.js?v=78").catch(() => {});
+    navigator.serviceWorker.register("/sw.js?v=80").catch(() => {});
 }
 
 function showToast(message) {

@@ -1,5 +1,5 @@
-import * as PIXI from "./vendor/pixi.min.mjs?v=78";
-import { createBoardLayout } from "./boardLayout.js?v=78";
+import * as PIXI from "./vendor/pixi.min.mjs?v=80";
+import { createBoardLayout } from "./boardLayout.js?v=80";
 
 const instances = new WeakMap();
 const pipColors = {
@@ -69,11 +69,14 @@ export async function renderPixiBoard(container, options) {
       onTap: () => options.onTarget?.("opening")
     });
   } else {
+    const recentLabelIndexes = recentPlayedTileIndexes(layout.plays, options.labelDurationMs ?? 5000);
+
     for (const tile of layout.plays) {
       drawDomino(boardLayer, tile, {
         app,
         slam: options.slamLock?.type === "slam" && options.slamLock.tileId === tile.id,
-        slamDurationMs: options.slamLock?.durationMs ?? 5000
+        slamDurationMs: options.slamLock?.durationMs ?? 5000,
+        playedBy: recentLabelIndexes.has(tile.index) ? options.playerNamesById?.[tile.playerId] : null
       });
     }
 
@@ -182,11 +185,69 @@ function drawDomino(layer, tile, options = {}) {
 
   drawPips(group, firstHalf, tile.displayFirst);
   drawPips(group, secondHalf, tile.displaySecond);
+
+  if (options.playedBy) {
+    drawPlayedByLabel(group, tile, options.playedBy);
+  }
+
   layer.addChild(group);
 
   if (options.slam && options.app) {
     pulseDomino(options.app, group, glow, tile, options.slamDurationMs);
   }
+}
+
+function recentPlayedTileIndexes(tiles, labelDurationMs) {
+  const now = Date.now();
+
+  return new Set(
+    tiles
+      .filter((tile) => tile.playerId && Number(tile.playedAt ?? 0) + labelDurationMs > now)
+      .sort((first, second) => Number(second.playedAt ?? 0) - Number(first.playedAt ?? 0))
+      .slice(0, 2)
+      .map((tile) => tile.index)
+  );
+}
+
+function drawPlayedByLabel(group, tile, playerName) {
+  const text = String(playerName ?? "").trim();
+
+  if (!text) {
+    return;
+  }
+
+  const label = new PIXI.Container();
+  const display = text.length > 16 ? `${text.slice(0, 15)}...` : text;
+  const labelText = new PIXI.Text({
+    text: display,
+    style: {
+      fill: 0xffffff,
+      fontFamily: "Arial, sans-serif",
+      fontSize: 12,
+      fontWeight: "900"
+    }
+  });
+  const paddingX = 7;
+  const paddingY = 4;
+
+  labelText.position.set(paddingX, paddingY);
+
+  const bubble = new PIXI.Graphics();
+  bubble.roundRect(0, 0, labelText.width + paddingX * 2, labelText.height + paddingY * 2, 8)
+    .fill({ color: 0x0b382f, alpha: 0.88 })
+    .stroke({ color: 0xf0b940, width: 1.5, alpha: 0.9 });
+  label.addChild(bubble);
+  label.addChild(labelText);
+
+  const x = tile.axis === "horizontal"
+    ? (tile.width - label.width) / 2
+    : tile.width + 5;
+  const y = tile.axis === "horizontal"
+    ? tile.height + 5
+    : (tile.height - label.height) / 2;
+
+  label.position.set(x, y);
+  group.addChild(label);
 }
 
 function pulseDomino(app, group, glow, tile, durationMs) {
