@@ -2,12 +2,16 @@ import {
   loadAudioPreference,
   playTileSound,
   saveAudioPreference
-} from "./audio.js?v=80";
+} from "./audio.js?v=81";
 import {
   disposeChampionshipDayVisuals,
   renderChampionshipDayVisualAnalytics
-} from "./championshipDayCharts.js?v=80";
-import { clearPixiBoard, renderPixiBoard } from "./pixiBoardRenderer.js?v=80";
+} from "./championshipDayCharts.js?v=83";
+import {
+  closeChampionshipReplay,
+  openChampionshipReplay
+} from "./championshipReplay.js?v=83";
+import { clearPixiBoard, renderPixiBoard } from "./pixiBoardRenderer.js?v=83";
 
 const state = {
   room: null,
@@ -50,7 +54,8 @@ const state = {
   handFlipsByGameKey: {},
   takeDatTimer: null,
   reactionTimer: null,
-  boardHoldTimer: null
+  boardHoldTimer: null,
+  championshipDayReplayTimer: null
 };
 
 const CHAT_BLOCK_MINUTES = 5;
@@ -215,6 +220,7 @@ const els = {
   leaderboardList: document.querySelector("#leaderboardList"),
   recordsCategory: document.querySelector("#recordsCategory"),
   recordsList: document.querySelector("#recordsList"),
+  pastChampionshipList: document.querySelector("#pastChampionshipList"),
   settingsPanel: document.querySelector("#settingsPanel"),
   settingsToggleButton: document.querySelector("#settingsToggleButton"),
   adminLoginForm: document.querySelector("#adminLoginForm"),
@@ -441,7 +447,6 @@ function bindEvents() {
   els.refreshStatsButton.addEventListener("click", () => {
     loadStats();
   });
-
   els.recordsCategory.addEventListener("change", renderStats);
   els.settingsToggleButton.addEventListener("click", () => {
     state.settingsExpanded = !state.settingsExpanded;
@@ -917,6 +922,7 @@ function render() {
   renderPortalSummary();
 
   if (state.adminView) {
+    closeChampionshipReplay();
     startAdminAutoRefresh();
     els.setupPanel.classList.add("hidden");
     els.joinPanel.classList.add("hidden");
@@ -943,6 +949,7 @@ function render() {
   els.sessionPill.textContent = seated ? playerName(state.playerId) : spectating ? "Spectating" : "Not seated";
 
   if (!hasRoom) {
+    closeChampionshipReplay();
     clearTimer();
     return;
   }
@@ -1931,6 +1938,7 @@ function renderStats() {
   if (!stats) {
     els.leaderboardList.innerHTML = `<div class="score-meta">loading</div>`;
     els.recordsList.innerHTML = "";
+    renderPastChampionships([], { loading: true });
     return;
   }
 
@@ -1956,6 +1964,68 @@ function renderStats() {
       </div>
     `).join("")
     : `<div class="score-meta">No records yet</div>`;
+
+  renderPastChampionships(stats.pastChampionships ?? []);
+}
+
+function renderPastChampionships(championships, options = {}) {
+  const containers = [els.pastChampionshipList].filter(Boolean);
+  const html = options.loading
+    ? `<div class="score-meta">loading</div>`
+    : championships.length
+    ? championships.map((championship) => {
+      const winners = championship.winners?.length
+        ? championship.winners.map((winner) => `${escapeHtml(winner.name)} (${escapeHtml(winner.score)} pts)`).join(", ")
+        : "No winner recorded";
+      const completed = championship.completedAt ? formatDateTime(championship.completedAt) : "Date unavailable";
+      const playerCount = championship.players?.length ?? 0;
+
+      return `
+        <div class="past-championship-row">
+          <div>
+            <strong>${escapeHtml(championship.matchLength)}-game championship</strong>
+            <span>${completed}</span>
+            <small>${winners} | ${escapeHtml(playerCount)} players</small>
+          </div>
+          ${championship.replayAvailable
+            ? `<button class="small-button championship-replay-history-button" type="button" data-match-id="${escapeHtml(championship.id)}">Replay Championship</button>`
+            : `<button class="small-button" type="button" disabled>No replay</button>`}
+        </div>
+      `;
+    }).join("")
+    : `<div class="score-meta">No past championships yet</div>`;
+
+  for (const container of containers) {
+    container.innerHTML = html;
+
+    container.querySelectorAll(".championship-replay-history-button").forEach((button) => {
+      button.addEventListener("click", () => {
+        const championship = state.stats?.pastChampionships?.find((item) => item.id === button.dataset.matchId);
+
+        if (!championship?.replay?.match) {
+          showToast("Replay data is not available for this championship.");
+          return;
+        }
+
+        openChampionshipReplay({
+          match: championship.replay.match,
+          seats: championship.replay.seats ?? [],
+          avatarHtml,
+          playerName: (playerId) => replayHistoryPlayerName(championship, playerId),
+          escapeHtml
+        });
+      });
+    });
+  }
+}
+
+function replayHistoryPlayerName(championship, playerId) {
+  const id = String(playerId);
+
+  return championship.replay?.seats?.find((seat) => String(seat.playerId) === id)?.name
+    ?? championship.replay?.match?.players?.find((player) => String(player.id) === id)?.name
+    ?? championship.players?.find((player) => String(player.playerId) === id)?.name
+    ?? id;
 }
 
 function renderSettings() {
@@ -2102,6 +2172,7 @@ function renderChampionshipDayWorkspace() {
   els.championshipDayWorkspace.classList.toggle("hidden", !sessionId);
 
   if (!sessionId) {
+    closeChampionshipDayReplay();
     els.championshipDayWorkspace.innerHTML = "";
     disposeChampionshipDayVisuals();
     return;
@@ -2135,6 +2206,8 @@ function renderChampionshipDayWorkspace() {
         ${championship.status === "active" ? `<button class="small-button danger-button" id="championshipDayEndButton" type="button">End Championship</button>` : ""}
         ${championship.status === "completed" ? `<button class="small-button" id="championshipDayReopenButton" type="button">Reopen Scores</button>` : ""}
         ${championship.status === "completed" ? `<button class="small-button championship-day-export-excel" id="championshipDayExportExcelButton" type="button">Export to Excel</button>` : ""}
+        ${championship.status === "completed" && championship.rounds.length > 0 ? `<button class="small-button championship-day-replay-button" id="championshipDayReplayButton" type="button">Replay Championship</button>` : ""}
+        ${championship.status === "completed" ? `<button class="small-button danger-button" id="championshipDayDeleteButton" type="button">Delete</button>` : ""}
       </div>
     </div>
     <div class="championship-day-stat-grid">
@@ -2746,8 +2819,195 @@ function championshipDayFinalRankingRow(ranking, championship) {
   `;
 }
 
+function openChampionshipDayReplay(championship) {
+  if (!championship?.rounds?.length) {
+    showToast("No completed rounds are available to replay.");
+    return;
+  }
+
+  closeChampionshipDayReplay();
+
+  const frames = championship.rounds.map((round, index) => ({
+    round,
+    label: `Round ${round.number}`,
+    standings: championshipDayReplayLeaderboard(championship, index + 1),
+    hotPlayers: championshipDayHotRoundPlayersForRound(round)
+  }));
+  const overlay = document.createElement("section");
+  overlay.className = "championship-day-replay-overlay";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.innerHTML = `
+    <div class="championship-day-replay-modal">
+      <div class="championship-day-replay-head">
+        <div>
+          <span>Championship Day Replay</span>
+          <h2>${escapeHtml(championship.name)}</h2>
+          <p data-championship-day-replay-status>Round 1 of ${escapeHtml(frames.length)}</p>
+        </div>
+        <button class="small-button" data-championship-day-replay-close type="button">Close</button>
+      </div>
+      <div class="championship-day-replay-scoreboard" data-championship-day-replay-scoreboard></div>
+      <div class="championship-day-replay-controls">
+        <strong data-championship-day-replay-caption>Animating scoreboard every 5 seconds</strong>
+        <div>
+          <button class="small-button" data-championship-day-replay-play type="button">Play</button>
+          <button class="small-button" data-championship-day-replay-pause type="button">Pause</button>
+          <button class="small-button" data-championship-day-replay-restart type="button">Restart</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const replay = {
+    overlay,
+    championship,
+    frames,
+    frameIndex: 0,
+    playing: true
+  };
+
+  overlay.querySelector("[data-championship-day-replay-close]")?.addEventListener("click", closeChampionshipDayReplay);
+  overlay.querySelector("[data-championship-day-replay-play]")?.addEventListener("click", () => {
+    replay.playing = true;
+    renderChampionshipDayReplayFrame(replay, replay.frameIndex);
+    scheduleChampionshipDayReplay(replay);
+  });
+  overlay.querySelector("[data-championship-day-replay-pause]")?.addEventListener("click", () => {
+    replay.playing = false;
+    clearChampionshipDayReplayTimer();
+    renderChampionshipDayReplayControls(replay);
+  });
+  overlay.querySelector("[data-championship-day-replay-restart]")?.addEventListener("click", () => {
+    replay.playing = true;
+    renderChampionshipDayReplayFrame(replay, 0);
+    scheduleChampionshipDayReplay(replay);
+  });
+
+  overlay._championshipDayReplay = replay;
+  renderChampionshipDayReplayFrame(replay, 0);
+  scheduleChampionshipDayReplay(replay);
+}
+
+function closeChampionshipDayReplay() {
+  clearChampionshipDayReplayTimer();
+  document.querySelector(".championship-day-replay-overlay")?.remove();
+}
+
+function scheduleChampionshipDayReplay(replay) {
+  clearChampionshipDayReplayTimer();
+  state.championshipDayReplayTimer = window.setTimeout(() => {
+    if (!replay.playing) {
+      return;
+    }
+
+    const nextFrame = replay.frameIndex + 1;
+
+    if (nextFrame >= replay.frames.length) {
+      replay.playing = false;
+      replay.overlay.querySelector("[data-championship-day-replay-caption]").textContent = "Replay complete";
+      renderChampionshipDayReplayControls(replay);
+      return;
+    }
+
+    renderChampionshipDayReplayFrame(replay, nextFrame);
+    scheduleChampionshipDayReplay(replay);
+  }, 5_000);
+}
+
+function clearChampionshipDayReplayTimer() {
+  if (state.championshipDayReplayTimer) {
+    clearTimeout(state.championshipDayReplayTimer);
+    state.championshipDayReplayTimer = null;
+  }
+}
+
+function renderChampionshipDayReplayFrame(replay, frameIndex) {
+  replay.frameIndex = frameIndex;
+  const frame = replay.frames[frameIndex];
+  const scoreboard = replay.overlay.querySelector("[data-championship-day-replay-scoreboard]");
+  const maxPoints = Math.max(1, ...frame.standings.map((player) => player.totalPoints));
+
+  replay.overlay.dataset.championshipDayReplayFrame = String(frame.round.number);
+  replay.overlay.querySelector("[data-championship-day-replay-status]").textContent = `${frame.label} of ${replay.frames.length}`;
+  replay.overlay.querySelector("[data-championship-day-replay-caption]").textContent = frameIndex === replay.frames.length - 1
+    ? "Final round showing. Winner reveal complete."
+    : "Next round in 5 seconds";
+
+  scoreboard.innerHTML = `
+    <div class="championship-day-replay-round">
+      <strong>${escapeHtml(frame.label)}</strong>
+      <span>${escapeHtml(formatDateTime(frame.round.completedAt))}</span>
+    </div>
+    <div class="championship-day-bars championship-day-replay-bars">
+      ${frame.standings.map((player) => {
+        const rank = player.currentRank ?? player.rank;
+        const isTopThree = rank <= 3;
+        const isHot = frame.hotPlayers.has(player.playerId);
+        const progress = Math.round((player.totalPoints / maxPoints) * 100);
+
+        return `
+          <div class="championship-day-bar-row ${isTopThree ? "is-top-three" : ""}">
+            <span class="championship-day-bar-player">
+              <span>${escapeHtml(ordinal(rank))} ${escapeHtml(player.playerName)}${isHot ? championshipDayFlameHtml("20+ points this round") : ""}</span>
+              <small>${escapeHtml(player.currentTableLabel ?? "No table")} | ${escapeHtml(player.roundsPlayed)} rounds</small>
+            </span>
+            <div class="championship-day-bar-track">
+              <div class="championship-day-bar-fill championship-day-replay-bar-fill" style="width: ${progress}%"></div>
+              ${avatarHtml(player.avatarId, "championship-day-progress-avatar", `left: clamp(13px, ${progress}%, calc(100% - 13px));`)}
+            </div>
+            <strong>${escapeHtml(player.totalPoints)}</strong>
+            <small class="championship-day-bar-meta">
+              NW ${escapeHtml(player.normalWins)} | LW ${escapeHtml(player.lockWins)} | 2nd ${escapeHtml(player.secondPlaces)} | 3rd ${escapeHtml(player.thirdPlaces)} | 4th ${escapeHtml(player.fourthPlaces)} | LL ${escapeHtml(player.lockLoses)} | Avg ${escapeHtml(player.averagePoints.toFixed(1))}
+            </small>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+  renderChampionshipDayReplayControls(replay);
+}
+
+function renderChampionshipDayReplayControls(replay) {
+  replay.overlay.querySelector("[data-championship-day-replay-play]")?.toggleAttribute("disabled", replay.playing);
+  replay.overlay.querySelector("[data-championship-day-replay-pause]")?.toggleAttribute("disabled", !replay.playing);
+}
+
+function championshipDayReplayLeaderboard(championship, roundCount) {
+  const tablesByPlayerId = new Map();
+  const partial = {
+    ...championship,
+    rounds: (championship.rounds ?? []).slice(0, roundCount),
+    currentTables: championship.currentTables ?? []
+  };
+
+  for (const round of partial.rounds) {
+    for (const table of round.tableResults ?? []) {
+      for (const ranking of table.rankings ?? []) {
+        tablesByPlayerId.set(ranking.playerId, table.tableLabel);
+      }
+    }
+  }
+
+  return championshipDayLeaderboard(partial).map((player) => ({
+    ...player,
+    currentTableLabel: tablesByPlayerId.get(player.playerId) ?? player.currentTableLabel
+  }));
+}
+
+function championshipDayHotRoundPlayersForRound(round) {
+  return new Set(
+    (round?.tableResults ?? [])
+      .flatMap((table) => table.rankings ?? [])
+      .filter((ranking) => Number(ranking.totalPoints) >= 20)
+      .map((ranking) => ranking.playerId)
+  );
+}
+
 function bindChampionshipDayWorkspace() {
   document.querySelector("#championshipDayBackButton")?.addEventListener("click", () => {
+    closeChampionshipDayReplay();
     state.championshipDayId = null;
     state.championshipDayDetail = null;
     state.championshipDayTieBreaker = null;
@@ -2778,6 +3038,14 @@ function bindChampionshipDayWorkspace() {
 
   document.querySelector("#championshipDayExportExcelButton")?.addEventListener("click", async () => {
     await exportChampionshipDayExcel(state.championshipDayDetail.id);
+  });
+
+  document.querySelector("#championshipDayReplayButton")?.addEventListener("click", () => {
+    openChampionshipDayReplay(state.championshipDayDetail);
+  });
+
+  document.querySelector("#championshipDayDeleteButton")?.addEventListener("click", async () => {
+    await deleteChampionshipDayWithConfirmation(state.championshipDayDetail);
   });
 
   document.querySelector("#championshipDayChartPlayerFilter")?.addEventListener("change", (event) => {
@@ -3535,6 +3803,7 @@ function renderAdminChampionshipDay() {
           <button class="small-button championship-day-open" type="button" data-session-id="${escapeHtml(session.id)}">Open Workspace</button>
           ${session.status === "active" ? `<button class="small-button danger-button championship-day-end" type="button" data-session-id="${escapeHtml(session.id)}">End</button>` : ""}
           ${session.status === "completed" ? `<button class="small-button championship-day-reopen" type="button" data-session-id="${escapeHtml(session.id)}">Reopen Scores</button>` : ""}
+          ${session.status === "completed" ? `<button class="small-button danger-button championship-day-delete" type="button" data-session-id="${escapeHtml(session.id)}" data-session-name="${escapeHtml(session.name || session.id)}">Delete</button>` : ""}
         </div>
       </article>
     `).join("")
@@ -3611,6 +3880,37 @@ function bindChampionshipDayButtons() {
     });
   });
 
+  els.championshipDayList.querySelectorAll(".championship-day-delete").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const sessionName = button.dataset.sessionName ?? "this championship";
+      const sessionId = button.dataset.sessionId;
+      const confirmed = window.confirm(`Delete ${sessionName}? This cannot be undone.`);
+
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        await api(`/api/admin/championship-day/${encodeURIComponent(sessionId)}`, {
+          method: "DELETE",
+          headers: portalAdminHeaders()
+        });
+        showToast("Championship deleted");
+
+        if (state.championshipDayId === sessionId) {
+          closeChampionshipDayReplay();
+          state.championshipDayId = null;
+          state.championshipDayDetail = null;
+          history.pushState(null, "", "/admin/");
+        }
+
+        await loadPortalData();
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+  });
+
   els.championshipDayList.querySelectorAll("[data-session-results-toggle]").forEach((button) => {
     button.addEventListener("click", () => {
       const sessionId = button.dataset.sessionResultsToggle;
@@ -3656,6 +3956,37 @@ async function endChampionshipDayWithConfirmation(championship) {
   state.championshipDayEditingRoundNumber = null;
   showToast("Championship Day ended");
   await loadPortalData();
+}
+
+async function deleteChampionshipDayWithConfirmation(championship) {
+  if (!championship) {
+    return;
+  }
+
+  const confirmed = window.confirm(`Delete ${championship.name ?? championship.id}? This cannot be undone.`);
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    await api(`/api/admin/championship-day/${encodeURIComponent(championship.id)}`, {
+      method: "DELETE",
+      headers: portalAdminHeaders()
+    });
+    closeChampionshipDayReplay();
+    state.championshipDayId = null;
+    state.championshipDayDetail = null;
+    state.championshipDayTieBreaker = null;
+    state.championshipDayScoreEntryOpen = false;
+    state.championshipDayActiveScoreTableId = null;
+    state.championshipDayEditingRoundNumber = null;
+    history.pushState(null, "", "/admin/");
+    showToast("Championship deleted");
+    await loadPortalData();
+  } catch (error) {
+    showToast(error.message);
+  }
 }
 
 function confirmChampionshipDayEnd(championship, completedRounds) {
@@ -4071,9 +4402,17 @@ function renderFinalResults(match) {
       </div>
     `).join("");
 
+  const replayAvailable = Number(match.matchLength ?? 0) >= 5 && (match.completedGames ?? []).length >= 5;
+
   return `
     <div class="results-panel compact-results">
-      <h2>Final Scores</h2>
+      <div class="results-title">
+        <div>
+          <h2>Final Scores</h2>
+          <p>${replayAvailable ? "Replay the championship score race." : "Replay is available for 5-game championships and above."}</p>
+        </div>
+        ${replayAvailable ? `<button class="small-button championship-replay-button" id="championshipReplayButton" type="button">Replay Championship</button>` : ""}
+      </div>
       ${rows}
     </div>
   `;
@@ -4233,6 +4572,20 @@ function bindNewSessionControl() {
 }
 
 function bindNewMatchControls() {
+  const replayButton = els.board.querySelector("#championshipReplayButton");
+
+  if (replayButton) {
+    replayButton.addEventListener("click", () => {
+      openChampionshipReplay({
+        match: state.room.match,
+        seats: state.room.seats,
+        avatarHtml,
+        playerName,
+        escapeHtml
+      });
+    });
+  }
+
   const button = els.board.querySelector("#newMatchButton");
   const select = els.board.querySelector("#newMatchLength");
 
@@ -4274,6 +4627,8 @@ function bindNewMatchControls() {
 }
 
 function returnToStartPage() {
+  closeChampionshipReplay();
+
   if (state.events) {
     state.events.close();
     state.events = null;
@@ -5503,7 +5858,7 @@ function registerServiceWorker() {
     return;
   }
 
-    navigator.serviceWorker.register("/sw.js?v=80").catch(() => {});
+    navigator.serviceWorker.register("/sw.js?v=83").catch(() => {});
 }
 
 function showToast(message) {

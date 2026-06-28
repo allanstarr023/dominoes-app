@@ -1,4 +1,4 @@
-import * as echarts from "./vendor/echarts.esm.min.mjs?v=78";
+import * as echarts from "./vendor/echarts.esm.min.mjs?v=83";
 
 const chartInstances = new Map();
 let resizeBound = false;

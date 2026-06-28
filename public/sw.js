@@ -1,20 +1,21 @@
-const CACHE_NAME = "dominoes-table-v80";
+const CACHE_NAME = "dominoes-table-v83";
 const STATIC_ASSETS = [
   "/",
   "/index.html",
-  "/styles.css?v=80",
-  "/app.js?v=80",
-  "/audio.js?v=79",
-  "/boardLayout.js?v=80",
-  "/championshipDayCharts.js?v=79",
-  "/pixiBoardRenderer.js?v=80",
-  "/vendor/echarts.esm.min.mjs?v=80",
-  "/vendor/pixi.min.mjs?v=80",
-  "/manifest.webmanifest?v=80",
-  "/icon.svg?v=80",
-  "/favicon.ico?v=80",
-  "/audio/domino-tile.wav?v=80",
-  "/audio/domino-slam.wav?v=80"
+  "/styles.css?v=83",
+  "/app.js?v=83",
+  "/audio.js?v=81",
+  "/boardLayout.js?v=83",
+  "/championshipReplay.js?v=83",
+  "/championshipDayCharts.js?v=83",
+  "/pixiBoardRenderer.js?v=83",
+  "/vendor/echarts.esm.min.mjs?v=83",
+  "/vendor/pixi.min.mjs?v=83",
+  "/manifest.webmanifest?v=83",
+  "/icon.svg?v=83",
+  "/favicon.ico?v=83",
+  "/audio/domino-tile.wav?v=81",
+  "/audio/domino-slam.wav?v=81"
 ];
 
 self.addEventListener("install", (event) => {

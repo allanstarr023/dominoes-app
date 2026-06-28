@@ -1,5 +1,5 @@
-import * as PIXI from "./vendor/pixi.min.mjs?v=80";
-import { createBoardLayout } from "./boardLayout.js?v=80";
+import * as PIXI from "./vendor/pixi.min.mjs?v=83";
+import { createBoardLayout } from "./boardLayout.js?v=83";
 
 const instances = new WeakMap();
 const pipColors = {

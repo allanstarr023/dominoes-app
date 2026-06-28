@@ -796,6 +796,24 @@ async function adminChampionshipDayHandler(context, parts) {
     return;
   }
 
+  if (request.method === "DELETE" && !action) {
+    const session = requirePortalAdmin(context, ["owner", "manager"]);
+
+    championshipDaySessions.delete(sessionId);
+    await persistChampionshipDaySessions(context);
+    await context.statsStore.recordAdminAction({
+      ...adminAuditFields(session),
+      type: "championshipDayDeleted",
+      summary: `Deleted Championship Day ${championship.name || championship.id}`,
+      at: Date.now()
+    });
+    sendJson(response, 200, {
+      deleted: true,
+      championshipId: sessionId
+    });
+    return;
+  }
+
   if (request.method === "GET" && action === "export") {
     requirePortalAdmin(context);
 

@@ -136,6 +136,7 @@ export function createStatsStore(options = {}) {
       return {
         leaderboard: buildLeaderboard(data.matches),
         historicalWinners: buildHistoricalWinners(data.matches),
+        pastChampionships: buildPastChampionships(data.matches),
         records: buildRecords(data.matches),
         settings: data.settings
       };
@@ -490,7 +491,53 @@ function buildMatchRecord(room) {
       name: playerName(room, playerId),
       score: finalScores[playerId] ?? 0
     })),
-    players
+    players,
+    replay: buildMatchReplayRecord(room)
+  };
+}
+
+function buildMatchReplayRecord(room) {
+  const match = room.match;
+
+  if (!match || Number(match.matchLength ?? 0) < 5 || match.completedGames.length < 5) {
+    return null;
+  }
+
+  return {
+    seats: room.seats.map((seat) => ({
+      playerId: seat.playerId,
+      name: seat.name,
+      avatarId: seat.avatarId ?? null,
+      isBot: Boolean(seat.isBot)
+    })),
+    match: {
+      id: match.id,
+      status: match.status,
+      matchLength: match.matchLength,
+      rosterOrder: match.rosterOrder ?? match.playerOrder,
+      playerOrder: match.playerOrder,
+      players: Object.values(match.playersById).map((player) => ({
+        id: player.id,
+        name: player.name,
+        avatarId: player.avatarId ?? null,
+        isBot: Boolean(player.isBot)
+      })),
+      completedGames: match.completedGames.map((game) => ({
+        number: game.number,
+        completedAt: game.completedAt,
+        endReason: game.endReason,
+        winnerId: game.winnerId,
+        lockingPlayerId: game.lockingPlayerId,
+        activePlayerIds: game.activePlayerIds ?? [],
+        benchPlayerIds: game.benchPlayerIds ?? [],
+        placements: game.scoreResult.placements,
+        pointsByPlayerId: game.scoreResult.pointsByPlayerId
+      })),
+      finalScores: match.finalScores,
+      winnerIds: match.winnerIds,
+      rawScores: match.rawScores,
+      infractions: match.infractions
+    }
   };
 }
 
@@ -519,6 +566,23 @@ function buildLeaderboard(matches) {
       || second.totalWinningScore - first.totalWinningScore
       || second.lastWonAt - first.lastWonAt)
     .slice(0, 10);
+}
+
+function buildPastChampionships(matches) {
+  return [...matches]
+    .sort((first, second) => (second.completedAt ?? 0) - (first.completedAt ?? 0))
+    .slice(0, 30)
+    .map((match) => ({
+      id: match.id,
+      roomId: match.roomId,
+      matchId: match.matchId,
+      completedAt: match.completedAt,
+      matchLength: match.matchLength,
+      winners: match.winners ?? [],
+      players: match.players ?? [],
+      replayAvailable: Boolean(match.replay?.match && match.replay?.seats),
+      replay: match.replay ?? null
+    }));
 }
 
 function buildHistoricalWinners(matches) {

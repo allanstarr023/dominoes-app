@@ -1196,6 +1196,98 @@ button.share-option {
   gap: 8px;
 }
 
+.championship-day-replay-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  background: rgba(15, 27, 24, 0.74);
+  backdrop-filter: blur(8px);
+}
+
+.championship-day-replay-modal {
+  width: min(1040px, 100%);
+  max-height: calc(100dvh - 20px);
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(244, 178, 79, 0.55);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(244, 178, 79, 0.22), transparent 26%),
+    linear-gradient(145deg, #fffdf7, #eef5ef);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.4);
+}
+
+.championship-day-replay-head,
+.championship-day-replay-controls,
+.championship-day-replay-round {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.championship-day-replay-head span {
+  color: var(--gold);
+  font-size: 0.8rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.championship-day-replay-head h2,
+.championship-day-replay-head p {
+  margin: 0;
+}
+
+.championship-day-replay-head h2 {
+  font-size: clamp(1.2rem, 3vw, 2rem);
+}
+
+.championship-day-replay-scoreboard {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(57, 64, 60, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.64);
+  padding: 12px;
+}
+
+.championship-day-replay-round {
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.championship-day-replay-round strong {
+  color: var(--ink);
+  font-size: 1.05rem;
+}
+
+.championship-day-replay-bars .championship-day-bar-row {
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 8px 20px rgba(23, 107, 84, 0.08);
+}
+
+.championship-day-replay-bar-fill,
+.championship-day-replay-bars .championship-day-progress-avatar {
+  transition: width 0.9s cubic-bezier(0.22, 1, 0.36, 1), left 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.championship-day-replay-controls > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.championship-day-replay-controls strong {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .championship-day-final-row:nth-child(2) strong {
   color: #a66b00;
 }
@@ -2440,6 +2532,376 @@ body.board-fullscreen-active .board-fullscreen-button {
   grid-template-columns: 1fr auto;
 }
 
+.championship-replay-button {
+  background: #146fca;
+  box-shadow: 0 8px 18px rgba(20, 111, 202, 0.24);
+}
+
+.championship-replay-button:hover {
+  background: #0c56a1;
+}
+
+.past-championships-block {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.past-championships-block h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.past-championship-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 10px;
+}
+
+.past-championship-row div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.past-championship-row span,
+.past-championship-row small {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.past-championship-row small {
+  overflow-wrap: anywhere;
+}
+
+.championship-replay-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(12, 24, 22, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.championship-replay-modal {
+  width: min(1080px, 100%);
+  max-height: min(900px, calc(100dvh - 24px));
+  overflow-y: auto;
+  border: 1px solid rgba(240, 185, 64, 0.48);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 18% 10%, rgba(240, 185, 64, 0.18), transparent 28%),
+    linear-gradient(145deg, #fffdf8, #edf5f0);
+  color: var(--ink);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.38);
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.championship-replay-modal.compact {
+  width: min(520px, 100%);
+}
+
+.championship-replay-head,
+.championship-replay-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.championship-replay-head span {
+  color: var(--gold);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.championship-replay-head h2 {
+  margin-top: 4px;
+  font-size: clamp(1.15rem, 3vw, 2rem);
+}
+
+.championship-replay-head p,
+.championship-replay-status strong {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 900;
+}
+
+.championship-replay-chart-wrap {
+  position: relative;
+  border: 1px solid rgba(23, 107, 84, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.68);
+  overflow: hidden;
+}
+
+.championship-replay-chart {
+  width: 100%;
+  height: clamp(260px, 46dvh, 460px);
+}
+
+.championship-replay-avatar-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.championship-replay-line-avatar {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(23, 107, 84, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.12);
+  padding: 2px 6px 2px 2px;
+  transition: left 0.85s cubic-bezier(0.22, 1, 0.36, 1), top 0.85s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.championship-replay-line-avatar.is-leading {
+  border-color: rgba(240, 185, 64, 0.9);
+  box-shadow: 0 0 18px rgba(240, 185, 64, 0.5);
+}
+
+.championship-replay-line-avatar-icon {
+  width: 24px;
+  height: 24px;
+  font-size: 0.78rem;
+}
+
+.championship-replay-line-avatar span {
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.championship-replay-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.championship-replay-body {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.85fr) minmax(280px, 1.15fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.championship-replay-standings,
+.championship-replay-winner {
+  min-height: 140px;
+  border: 1px solid rgba(216, 210, 196, 0.92);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.74);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.championship-replay-row {
+  display: grid;
+  grid-template-columns: 30px 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fff;
+  border: 1px solid rgba(216, 210, 196, 0.92);
+  font-size: 0.9rem;
+}
+
+.championship-replay-row.is-leading {
+  border-color: rgba(240, 185, 64, 0.9);
+  background: linear-gradient(90deg, rgba(240, 185, 64, 0.22), rgba(255, 255, 255, 0.92));
+  animation: replayLeaderPulse 1.25s ease-in-out infinite;
+}
+
+.championship-replay-avatar,
+.championship-replay-medal-avatar {
+  width: 34px;
+  height: 34px;
+  font-size: 1.05rem;
+}
+
+.championship-replay-champion {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  border-radius: 8px;
+  padding: 14px;
+  background: linear-gradient(145deg, rgba(240, 185, 64, 0.28), rgba(23, 107, 84, 0.12));
+  text-align: center;
+}
+
+.championship-replay-champion span {
+  color: var(--gold);
+  font-size: 0.8rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.championship-replay-champion strong {
+  font-size: 1.35rem;
+}
+
+.championship-replay-champion-avatar {
+  width: 64px;
+  height: 64px;
+  font-size: 2rem;
+  box-shadow: 0 0 0 5px rgba(240, 185, 64, 0.3);
+}
+
+.championship-replay-medals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.championship-replay-medals > div {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  border: 1px solid rgba(216, 210, 196, 0.9);
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+  text-align: center;
+  font-size: 0.84rem;
+}
+
+.championship-replay-medals span {
+  color: var(--gold);
+  font-weight: 900;
+}
+
+@keyframes replayLeaderPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(240, 185, 64, 0);
+  }
+  50% {
+    box-shadow: 0 0 18px rgba(240, 185, 64, 0.42);
+  }
+}
+
+@media (max-width: 720px) {
+  .championship-day-replay-overlay {
+    align-items: stretch;
+    padding: 8px;
+  }
+
+  .championship-day-replay-modal {
+    max-height: calc(100dvh - 16px);
+    padding: 12px;
+  }
+
+  .championship-day-replay-head,
+  .championship-day-replay-controls,
+  .championship-day-replay-round {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .championship-day-replay-controls > div,
+  .championship-day-replay-controls button,
+  .championship-day-replay-head button {
+    width: 100%;
+  }
+
+  .championship-replay-overlay {
+    align-items: stretch;
+    padding: 8px;
+  }
+
+  .championship-replay-modal {
+    max-height: calc(100dvh - 16px);
+    padding: 12px;
+  }
+
+  .championship-replay-head,
+  .championship-replay-status,
+  .results-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .championship-replay-controls {
+    justify-content: stretch;
+  }
+
+  .championship-replay-controls button,
+  .championship-replay-head button,
+  .championship-replay-button {
+    width: 100%;
+  }
+
+  .past-championship-row {
+    grid-template-columns: 1fr;
+  }
+
+  .championship-replay-chart {
+    height: min(360px, 42dvh);
+  }
+
+  .championship-replay-line-avatar {
+    padding-right: 4px;
+  }
+
+  .championship-replay-body,
+  .championship-replay-medals {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .championship-replay-overlay {
+    padding: 6px;
+  }
+
+  .championship-replay-modal {
+    grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr);
+    gap: 10px;
+    max-height: calc(100dvh - 12px);
+  }
+
+  .championship-replay-head,
+  .championship-replay-chart-wrap,
+  .championship-replay-chart,
+  .championship-replay-status {
+    grid-column: 1;
+  }
+
+  .championship-replay-body {
+    grid-column: 2;
+    grid-row: 1 / span 3;
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .championship-replay-chart {
+    height: min(260px, 58dvh);
+  }
+}
+
 .rematch-panel {
   margin-top: 12px;
 }
@@ -3519,6 +3981,20 @@ body.board-fullscreen-active .board-fullscreen-button {
 
   .championship-day-bar-row {
     grid-template-columns: minmax(84px, 1fr) minmax(90px, 2fr) 38px;
+  }
+
+  .championship-day-replay-overlay {
+    padding: 6px;
+  }
+
+  .championship-day-replay-modal {
+    max-height: calc(100dvh - 12px);
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .championship-day-replay-scoreboard {
+    padding: 8px;
   }
 
   .championship-day-echart {

@@ -1273,6 +1273,13 @@ test("championship day sessions persist, reconnect, export, and stay open until 
     const completed = completedPortal.body.championshipDaySessions.find((championship) => championship.id === "physical-persisted-day");
     assert.equal(completed.status, "completed");
     assert.equal(completed.currentRoundNumber, 2);
+
+    const deleted = await deleteJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day`, thirdLogin.body.token);
+    assert.equal(deleted.status, 200);
+    assert.equal(deleted.body.deleted, true);
+
+    const afterDelete = await getJson(`${baseUrl}/api/admin/championship-day/physical-persisted-day`, thirdLogin.body.token);
+    assert.equal(afterDelete.status, 404);
   } finally {
     if (server?.listening) {
       await closeTestServer(server);
@@ -1736,6 +1743,7 @@ test("stats endpoint returns leaderboard shape", async () => {
     assert.ok(body.records.lowestScore2);
     assert.ok(body.records.consecutiveWins2);
     assert.ok(body.historicalWinners);
+    assert.ok(body.pastChampionships);
   } finally {
     await closeTestServer(server);
   }
@@ -1808,6 +1816,20 @@ async function putJson(url, body, token) {
       Authorization: `Bearer ${token}`
     },
     body: JSON.stringify(body)
+  });
+
+  return {
+    status: response.status,
+    body: await response.json()
+  };
+}
+
+async function deleteJson(url, token) {
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
   });
 
   return {
